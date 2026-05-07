@@ -1,0 +1,13 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "chromadb>=1.5.9",
+    "dotenv>=0.9.9",
+    "fastapi[standard]>=0.136.1",
+    "pdfminer-six>=20260107",
+    "pydantic>=2.13.4",
+]
