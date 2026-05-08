@@ -1,3 +1,5 @@
+import asyncio
+
 import chromadb
 from chromadb.api import ClientAPI
 from fastapi import Depends
@@ -33,14 +35,15 @@ def create_collection(client: VectorDBClient, name: str):
         logging.error(f"Failed to create collection {name}: {str(e)}")
         raise CreateCollectionException(message=str(e))
 
-def get_collection(client: VectorDBClient, collection_name: str = "file_mgt"):
+def _get_collection(client: VectorDBClient, collection_name: str = "file_mgt"):
     if collection_name not in client.list_collections():
         raise CollectionNotFoundException(message=f"{collection_name} Collection does not exist")
     return client.get_collection(name=collection_name)
 
-def add_data_to_collection(data, collection= Depends(get_collection)):    
+async def add_data_to_collection(data, collection= Depends(_get_collection)):    
     try:
-        collection.add(
+        await asyncio.to_thread(
+            collection.add,
             documents=data["documents"],
             metadatas=data["metadatas"],
             ids=data["ids"]
@@ -51,7 +54,7 @@ def add_data_to_collection(data, collection= Depends(get_collection)):
         logging.error(f"Failed to insert data into Chroma: {str(e)}")
         raise ChromaInsertionException(message=str(e))
     
-def query_collection(query_text:str | List[str],top_k:int = 2, collection= Depends(get_collection)):
+def query_collection(query_text:str | List[str],top_k:int = 2, collection= Depends(_get_collection)):
     try:
         logging.info(f"Query text: {query_text} and Top k: {top_k}")
         results=collection.query(
@@ -63,7 +66,7 @@ def query_collection(query_text:str | List[str],top_k:int = 2, collection= Depen
         logging.error(f"Failed to query collection {collection.name}: {str(e)}")
         raise ChromaQueryException(message=str(e))
     
-def get_collection_by_id(ids: int | List[int], collection= Depends(get_collection)):
+def get_collection_by_id(ids: int | List[int], collection= Depends(_get_collection)):
     try:
         logging.info(f"Get collection with id: {id}")
         results=collection.get(ids=[id] if isinstance(id, int) else id)
