@@ -17,11 +17,23 @@ def configure_logging(log_level: str = LogLevels.error):
     log_levels = [level.value for level in LogLevels]
 
     if log_level not in log_levels:
-        logging.basicConfig(level=LogLevels.error)
-        return
+        log_level = LogLevels.error
 
+    # Get root logger and configure it directly (works even if basicConfig was already called)
+    logger = logging.getLogger()
+    logger.setLevel(log_level)
+    
+    # Remove existing handlers to avoid duplicates
+    logger.handlers.clear()
+    
+    # Add console handler
+    handler = logging.StreamHandler()
+    handler.setLevel(log_level)
+    
     if log_level == LogLevels.debug:
-        logging.basicConfig(level=log_level, format=LOG_FORMAT_DEBUG)
-        return
-
-    logging.basicConfig(level=log_level)
+        formatter = logging.Formatter(LOG_FORMAT_DEBUG)
+    else:
+        formatter = logging.Formatter("%(levelname)s:%(message)s")
+    
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
