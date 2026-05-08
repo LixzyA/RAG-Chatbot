@@ -41,3 +41,9 @@ class ChromaQueryException(HTTPException):
         self.status_code = 500
         self.detail = f"Failed to query collection: {message}"
         super().__init__(status_code=self.status_code, detail=self.detail)
+    
+class OverlapException(HTTPException):
+    def __init__(self, message):
+        self.status_code = 400
+        self.detail = f"Invalid overlap: {message}"
+        super().__init__(status_code=self.status_code, detail=self.detail)
