@@ -5,6 +5,6 @@ from vectordb.core import VectorDBClient
 
 router = APIRouter(prefix="/files", tags=["files"])
 
-@router.post("/upload")
-async def upload_file(file: UploadFile, client: VectorDBClient) -> UploadFileResponse:
+@router.post("/upload", response_model=UploadFileResponse)
+async def upload_file(file: UploadFile, client: VectorDBClient):
    return await service.upload_file(file, client)
