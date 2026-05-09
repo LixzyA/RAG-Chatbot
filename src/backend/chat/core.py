@@ -1,6 +1,6 @@
 import logging
 from huggingface_hub import AsyncInferenceClient
-from chat.service import LLM_MODEL
+from chat.service import SPECIALIST_MODEL
 
 llm_client = None
 
@@ -19,7 +19,7 @@ async def llm_healthcheck():
         return False
     try:
         response = await llm_client.chat.completions.create(
-            model=LLM_MODEL,
+            model=SPECIALIST_MODEL,
             messages=[{"role": "user", "content": "Hello"}],
             temperature=0.1
         )

@@ -85,3 +85,5 @@ def chunk_text(text: str, chunk_size: int, overlap: int) -> List[str]:
             break
         start += (chunk_size - overlap)
     return chunks
+
+# TODO: implement semantic chunking
