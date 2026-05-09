@@ -14,5 +14,5 @@ async def query_chat(
     llm_client=core.llm_client
 
     async for chunk in service.query_chat(db_client, llm_client, **query_req.model_dump()):
-        yield ServerSentEvent(data=chunk)
+        yield ServerSentEvent(raw_data=chunk)
     yield ServerSentEvent(raw_data="[DONE]", event="done")
