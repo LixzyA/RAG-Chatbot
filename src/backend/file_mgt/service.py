@@ -7,7 +7,7 @@ from exception import FileNameNotFound, FileTypeNotSupportedException, PDFProces
 import os
 from pdfminer.high_level import extract_text as pdf_extract_text
 import asyncio
-from vectordb.core import add_data_to_collection, query_collection, get_collection_by_id, _get_collection
+from vectordb.core import add_data_to_collection
 
 ALLOWED_FILE_TYPE = ['.txt', '.pdf']
 CHUNK_SIZE = 1024

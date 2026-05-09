@@ -6,7 +6,7 @@ from . import models
 from . import core
 router = APIRouter(prefix="/chat", tags=["chat"])
 
-# TODO: implement chat and sse
+
 @router.post("/", response_class=EventSourceResponse)
 async def query_chat(   
     query_req: models.ChatQueryRequest,

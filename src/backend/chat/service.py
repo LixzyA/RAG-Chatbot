@@ -1,5 +1,4 @@
-from vectordb.core import query_collection, get_collection_by_id
-from typing import List
+from vectordb.core import query_collection
 import logging
 import os
 from collections.abc import AsyncIterable
@@ -12,8 +11,6 @@ async def query_chat(db_client, llm_client, prompt: str, top_k: int) -> AsyncIte
 
     files: dict = query_collection(db_client, "file_mgt",query_text=prompt, top_k=top_k)
     logging.info(f"Retrieved {len(files['ids'][0])} relevant files from vector database")
-    # logging.info(f"Retrieved files: {files}")
-    # logging.info(f"Documents: \n{files['documents'][0]}")
     
     # menyusun prompt (context + question) untuk dikirim ke LLM
     context_text = "\n\n".join([res for res in files['documents'][0]])
