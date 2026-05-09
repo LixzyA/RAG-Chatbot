@@ -1,0 +1,397 @@
+import { useState, useRef, useEffect, useCallback } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Card, CardContent } from "@/components/ui/card";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+
+// ── Types ──────────────────────────────────────────────────────────
+
+interface Message {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+}
+
+// ── Helpers ────────────────────────────────────────────────────────
+
+function generateUUID(): string {
+  return crypto.randomUUID();
+}
+
+// ── Component ──────────────────────────────────────────────────────
+
+export default function Chat() {
+  const [chatId, setChatId] = useState<string>(generateUUID);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState("");
+  const [streaming, setStreaming] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Auto-scroll to bottom when messages change
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  // Focus input on mount and after each response
+  useEffect(() => {
+    if (!streaming) inputRef.current?.focus();
+  }, [streaming]);
+
+  // Cleanup abort controller on unmount
+  useEffect(() => {
+    return () => abortRef.current?.abort();
+  }, []);
+
+  // ── Submit handler ───────────────────────────────────────────────
+
+  const handleSubmit = useCallback(
+    async (e?: React.FormEvent) => {
+      e?.preventDefault();
+      const trimmed = input.trim();
+      if (!trimmed || streaming) return;
+
+      setError(null);
+      setInput("");
+
+      // Add user message
+      const userMsg: Message = {
+        id: generateUUID(),
+        role: "user",
+        content: trimmed,
+      };
+      setMessages((prev) => [...prev, userMsg]);
+
+      // Prepare assistant placeholder
+      const assistantId = generateUUID();
+      const assistantMsg: Message = {
+        id: assistantId,
+        role: "assistant",
+        content: "",
+      };
+      setMessages((prev) => [...prev, assistantMsg]);
+      setStreaming(true);
+
+      try {
+        const controller = new AbortController();
+        abortRef.current = controller;
+
+        const res = await fetch("http://localhost:8000/chat/", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt: trimmed, top_k: 10 }),
+          signal: controller.signal,
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => null);
+          throw new Error(
+            errData?.detail || `Request failed with status ${res.status}`
+          );
+        }
+
+        const reader = res.body?.getReader();
+        const decoder = new TextDecoder();
+
+        if (!reader) throw new Error("No response body");
+
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+
+          // Parse SSE lines
+          const lines = buffer.split("\n");
+          // Keep the last potentially incomplete line in the buffer
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            if (line.startsWith("event: done")) {
+              // Stream finished
+              break;
+            }
+            if (line.startsWith("data: ")) {
+              const data = line.slice(6);
+              if (data === "[DONE]") break;
+
+              // Append token to assistant message
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === assistantId
+                    ? { ...msg, content: msg.content + data }
+                    : msg
+                )
+              );
+            }
+          }
+        }
+      } catch (err) {
+        if ((err as Error).name === "AbortError") return;
+        setError(
+          err instanceof Error ? err.message : "An unknown error occurred"
+        );
+        // Remove the empty assistant placeholder on error
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.id === assistantId && last.content === "") {
+            return prev.slice(0, -1);
+          }
+          return prev;
+        });
+      } finally {
+        setStreaming(false);
+        abortRef.current = null;
+      }
+    },
+    [input, streaming]
+  );
+
+  // ── New chat handler ─────────────────────────────────────────────
+
+  const handleNewChat = () => {
+    abortRef.current?.abort();
+    setChatId(generateUUID());
+    setMessages([]);
+    setInput("");
+    setError(null);
+    setStreaming(false);
+    inputRef.current?.focus();
+  };
+
+  // ── Render ───────────────────────────────────────────────────────
+
+  return (
+    <div className="flex min-h-svh flex-col">
+      {/* Top bar */}
+      <header className="sticky top-14 z-10 flex items-center justify-between border-b border-border bg-background/80 px-4 py-3 backdrop-blur-md sm:px-6">
+        <div className="flex flex-col gap-0.5">
+          <h1 className="text-lg font-semibold tracking-tight">Chat</h1>
+          <p className="text-muted-foreground font-mono text-[11px]">
+            {chatId.slice(0, 8)}…
+          </p>
+        </div>
+
+        {/* New Chat button with confirmation dialog */}
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button id="new-chat-btn" variant="outline" size="sm" disabled={messages.length === 0 && !streaming}>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                data-icon="inline-start"
+                className="mr-1"
+              >
+                <line x1="12" y1="5" x2="12" y2="19" />
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+              New Chat
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Start a new chat?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will clear the current chat history. This action cannot be
+                undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction id="confirm-new-chat-btn" onClick={handleNewChat}>
+                Continue
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </header>
+
+      {/* Messages area */}
+      <main className="flex-1 overflow-y-auto px-4 py-6 sm:px-6">
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
+          {messages.length === 0 && !streaming && (
+            <div className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-center">
+              <div className="flex size-14 items-center justify-center rounded-full bg-muted">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="24"
+                  height="24"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="text-muted-foreground"
+                >
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                </svg>
+              </div>
+              <div>
+                <p className="font-medium">Start a conversation</p>
+                <p className="text-muted-foreground text-sm">
+                  Ask a question about your uploaded documents.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {messages.map((msg) => (
+            <div
+              key={msg.id}
+              className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+            >
+              <Card
+                size="sm"
+                className={`max-w-[85%] sm:max-w-[75%] ${
+                  msg.role === "user"
+                    ? "bg-primary text-primary-foreground ring-primary/20"
+                    : "bg-card ring-foreground/10"
+                }`}
+              >
+                <CardContent>
+                  {/* Sender label */}
+                  <p
+                    className={`mb-1.5 text-[11px] font-semibold uppercase tracking-wider ${
+                      msg.role === "user"
+                        ? "text-primary-foreground/70"
+                        : "text-muted-foreground"
+                    }`}
+                  >
+                    {msg.role === "user" ? "You" : "Assistant"}
+                  </p>
+
+                  {/* Message content */}
+                  {msg.content ? (
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed">
+                      {msg.content}
+                    </p>
+                  ) : (
+                    // Streaming placeholder dots
+                    <div className="flex items-center gap-1 py-1">
+                      <span className="bg-muted-foreground/40 size-1.5 animate-pulse rounded-full" />
+                      <span className="bg-muted-foreground/40 size-1.5 animate-pulse rounded-full [animation-delay:150ms]" />
+                      <span className="bg-muted-foreground/40 size-1.5 animate-pulse rounded-full [animation-delay:300ms]" />
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          ))}
+
+          {/* Error message */}
+          {error && (
+            <div
+              id="chat-error"
+              className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive animate-in fade-in slide-in-from-top-2 duration-200"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="mt-0.5 shrink-0"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+              <p>{error}</p>
+            </div>
+          )}
+
+          <div ref={messagesEndRef} />
+        </div>
+      </main>
+
+      {/* Input bar */}
+      <footer className="sticky bottom-0 border-t border-border bg-background/80 px-4 py-3 backdrop-blur-md sm:px-6">
+        <form
+          onSubmit={handleSubmit}
+          className="mx-auto flex w-full max-w-3xl items-center gap-2"
+        >
+          <Input
+            id="chat-input"
+            ref={inputRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Type your message…"
+            disabled={streaming}
+            autoComplete="off"
+            className="flex-1"
+          />
+          <Button
+            id="send-btn"
+            type="submit"
+            disabled={!input.trim() || streaming}
+          >
+            {streaming ? (
+              <svg
+                className="size-4 animate-spin"
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+              >
+                <circle
+                  className="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  strokeWidth="4"
+                />
+                <path
+                  className="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                />
+              </svg>
+            ) : (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <line x1="22" y1="2" x2="11" y2="13" />
+                <polygon points="22 2 15 22 11 13 2 9 22 2" />
+              </svg>
+            )}
+          </Button>
+        </form>
+      </footer>
+    </div>
+  );
+}
