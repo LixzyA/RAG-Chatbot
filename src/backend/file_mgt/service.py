@@ -40,7 +40,7 @@ async def upload_file(file: UploadFile, client) -> models.UploadFileResponse:
     
     # Extract text
     if file_type == ".pdf":
-        text_content = extract_text(file_type, file_path)
+        text_content = extract_text(file_path)
     else:
         text_content = content.decode("utf-8")
     # Chunk text
@@ -55,7 +55,7 @@ async def upload_file(file: UploadFile, client) -> models.UploadFileResponse:
         file_content=text_content
     )
 
-def extract_text(file_type: str, file_path: str) -> str:
+def extract_text(file_path: str) -> str:
     try:
         text_content = pdf_extract_text(file_path)
         logging.info(f"File {file_path} processed successfully")
