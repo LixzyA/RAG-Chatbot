@@ -244,3 +244,4 @@ dist-ssr
 *.sln
 *.sw?
 chroma/
+*.jsonl
