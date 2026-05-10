@@ -1,8 +1,12 @@
+from exception import LLMException
 from vectordb.core import query_collection
 from chat.router import classify_query, is_serious_topic
 import logging
 import os
 from collections.abc import AsyncIterable
+from pathlib import Path
+import ragas
+
 
 TOP_K = int(os.getenv("MAX_RETRIEVAL", 10))
 SPECIALIST_MODEL = os.getenv("SPECIALIST_MODEL", "meta-llama/Llama-4-Scout-17B-16E-Instruct")
@@ -12,19 +16,9 @@ ROUTER_MODEL = os.getenv("ROUTER_MODEL", "meta-llama/Llama-3.2-1B-Instruct")
 # ---------------------------------------------------------------------------
 # System prompts
 # ---------------------------------------------------------------------------
-SPECIALIST_SYSTEM_PROMPT = (
-    "You are an expert assistant specializing in providing precise, thorough, "
-    "and well-structured answers to complex questions. Use the retrieved context "
-    "to support your response. Be accurate and cite relevant details from the "
-    "context. If the context does not contain enough information, clearly state "
-    "what you know and what is uncertain."
-)
-
-GENERALIST_SYSTEM_PROMPT = (
-    "You are a friendly and helpful assistant. Use the provided context to "
-    "inform your answer when relevant, but feel free to draw on general "
-    "knowledge as well. Keep your responses conversational, clear, and helpful."
-)
+_MODULE_DIR = Path(__file__).parent
+SPECIALIST_SYSTEM_PROMPT = (_MODULE_DIR / 'prompt' / 'specialist.txt').read_text()
+GENERALIST_SYSTEM_PROMPT = (_MODULE_DIR / 'prompt' / 'generalist.txt').read_text()
 
 # ---------------------------------------------------------------------------
 # Prompt builders
@@ -75,7 +69,8 @@ async def query_chat(db_client, llm_client, prompt: str, top_k: int) -> AsyncIte
     )
 
     # 2. RAG retrieval (both paths)
-    files: dict = query_collection(db_client, "file_mgt", query_text=prompt, top_k=top_k)
+    collection_name = os.getenv("CHROMA_COLLECTION_NAME", "file_corpus")
+    files: dict = query_collection(db_client, "file_corpus", query_text=prompt, top_k=top_k)
     logging.info(f"Retrieved {len(files['ids'][0])} relevant files from vector database")
 
     context_text = "\n\n".join([res for res in files['documents'][0]])
@@ -91,21 +86,26 @@ async def query_chat(db_client, llm_client, prompt: str, top_k: int) -> AsyncIte
         full_prompt = _build_generalist_prompt(prompt, context_text)
 
     logging.info(f"Using model: {model}")
+    logging.debug(f"Full prompt: {full_prompt}")
 
     # 4. Stream the response
-    response = await llm_client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": full_prompt},
-        ],
-        stream=True,
-        max_tokens=1024,
-    )
-    async for chunk in response:
-        content = chunk.choices[0].delta.content
-        if content:
-            yield content
+    try:
+        response = await llm_client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": full_prompt},
+            ],
+            stream=True,
+            max_tokens=1024,
+        )
+        async for chunk in response:
+            content = chunk.choices[0].delta.content
+            if content:
+                yield content
+    except Exception as e:
+        logging.error(f"Failed to generate response: {str(e)}")
+        raise LLMException(message=str(e))
 
 
 # TODO: evaluasi RAGAS
