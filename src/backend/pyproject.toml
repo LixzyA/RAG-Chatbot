@@ -11,4 +11,5 @@ dependencies = [
     "huggingface-hub>=1.14.0",
     "pdfminer-six>=20260107",
     "pydantic>=2.13.4",
+    "ragas>=0.4.3",
 ]

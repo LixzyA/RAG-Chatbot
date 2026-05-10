@@ -12,7 +12,7 @@ load_dotenv()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_llm()
-    configure_logging(LogLevels.info)
+    configure_logging(LogLevels.debug)
     init_chroma_client()
     yield
 
