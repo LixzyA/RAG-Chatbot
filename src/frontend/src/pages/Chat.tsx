@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -285,9 +287,96 @@ export default function Chat() {
 
                   {/* Message content */}
                   {msg.content ? (
-                    <p className="whitespace-pre-wrap text-sm leading-relaxed">
-                      {msg.content}
-                    </p>
+                    msg.role === "user" ? (
+                      <p className="whitespace-pre-wrap text-sm leading-relaxed">
+                        {msg.content}
+                      </p>
+                    ) : (
+                      <div className="prose-chat text-sm leading-relaxed">
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            h1: ({ children }) => (
+                              <h1 className="mb-3 mt-4 text-lg font-bold first:mt-0">{children}</h1>
+                            ),
+                            h2: ({ children }) => (
+                              <h2 className="mb-2 mt-3 text-base font-semibold first:mt-0">{children}</h2>
+                            ),
+                            h3: ({ children }) => (
+                              <h3 className="mb-2 mt-3 text-sm font-semibold first:mt-0">{children}</h3>
+                            ),
+                            p: ({ children }) => (
+                              <p className="mb-2 last:mb-0">{children}</p>
+                            ),
+                            ul: ({ children }) => (
+                              <ul className="mb-2 ml-4 list-disc space-y-1 last:mb-0">{children}</ul>
+                            ),
+                            ol: ({ children }) => (
+                              <ol className="mb-2 ml-4 list-decimal space-y-1 last:mb-0">{children}</ol>
+                            ),
+                            li: ({ children }) => (
+                              <li className="pl-1">{children}</li>
+                            ),
+                            a: ({ href, children }) => (
+                              <a
+                                href={href}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-primary underline underline-offset-2 hover:text-primary/80"
+                              >
+                                {children}
+                              </a>
+                            ),
+                            blockquote: ({ children }) => (
+                              <blockquote className="my-2 border-l-2 border-muted-foreground/30 pl-3 italic text-muted-foreground">
+                                {children}
+                              </blockquote>
+                            ),
+                            code: ({ className, children, ...props }) => {
+                              const isBlock = className?.includes("language-");
+                              if (isBlock) {
+                                return (
+                                  <pre className="my-2 overflow-x-auto rounded-md bg-muted/60 p-3">
+                                    <code className="text-xs" {...props}>
+                                      {children}
+                                    </code>
+                                  </pre>
+                                );
+                              }
+                              return (
+                                <code
+                                  className="rounded bg-muted/60 px-1.5 py-0.5 text-xs font-mono"
+                                  {...props}
+                                >
+                                  {children}
+                                </code>
+                              );
+                            },
+                            pre: ({ children }) => <>{children}</>,
+                            table: ({ children }) => (
+                              <div className="my-2 overflow-x-auto rounded-md border border-border">
+                                <table className="w-full text-xs">{children}</table>
+                              </div>
+                            ),
+                            thead: ({ children }) => (
+                              <thead className="bg-muted/40">{children}</thead>
+                            ),
+                            th: ({ children }) => (
+                              <th className="px-3 py-1.5 text-left font-semibold">{children}</th>
+                            ),
+                            td: ({ children }) => (
+                              <td className="border-t border-border px-3 py-1.5">{children}</td>
+                            ),
+                            hr: () => <hr className="my-3 border-border" />,
+                            strong: ({ children }) => (
+                              <strong className="font-semibold">{children}</strong>
+                            ),
+                          }}
+                        >
+                          {msg.content}
+                        </ReactMarkdown>
+                      </div>
+                    )
                   ) : (
                     // Streaming placeholder dots
                     <div className="flex items-center gap-1 py-1">
