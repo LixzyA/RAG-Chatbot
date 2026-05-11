@@ -5,38 +5,40 @@ Dokumen ini berisi penjelasan komprehensif mengenai arsitektur, alur data, dan d
 ## 1. Arsitektur Sistem
 
 Sistem RAG-Chatbot ini dibangun menggunakan arsitektur *client-server* moduler dengan pemisahan antara frontend dan backend:
+
 - **Frontend**: Dibangun menggunakan **React**, **Vite**, **TypeScript**, dan **TailwindCSS** (beserta komponen shadcn/ui). Frontend bertugas menangani interaksi pengguna, upload dokumen, dan merender respons dari AI secara *real-time* dengan format Markdown.
-- **Backend**: Dibangun menggunakan **FastAPI** (Python 3.12+). Backend menangani logika API, *streaming* Server-Sent Events (SSE), manajemen file, serta orkestrasi pemrosesan NLP.
+- **Backend**: Dibangun menggunakan **FastAPI** (Python 3.14+). Backend menangani logika API, *streaming* Server-Sent Events (SSE), manajemen file, serta orkestrasi pemrosesan NLP.
 - **Vector Database**: Menggunakan **ChromaDB** yang berjalan secara lokal untuk menyimpan *embeddings* dari dokumen (korpus) guna mendukung pencarian konteks.
 - **LLM Engine**: Sistem ini tidak hanya menggunakan satu model, melainkan menerapkan sistem **Router** dengan model ganda (Generalist dan Specialist) untuk mengoptimalkan kinerja dan akurasi berdasarkan topik pertanyaan pengguna.
 
 ## 2. Diagram Alur Data
 
+### Alur Endpoint Chat
+
 Secara garis besar, aliran data dari saat *user* bertanya hingga mendapatkan jawaban adalah sebagai berikut:
-
-```mermaid
-flowchart TD
-    A[User Input] --> B[Frontend React]
-    B --> C[FastAPI Backend Endpoint]
-    C --> D[Router Model Llama-3.2-1B]
-    D -- Klasifikasi Topik --> E{Topik Serius?}
-    C --> F[ChromaDB Vector Search]
-    F -- Retrieval Dokumen --> G[Konteks Teratas]
-    E -- Ya --> H[Specialist Model Llama-4-17B]
-    E -- Tidak --> I[Generalist Model Llama-3.1-8B]
-    G --> H
-    G --> I
-    H -- Streaming SSE --> J[Frontend UI]
-    I -- Streaming SSE --> J[Frontend UI]
-```
-
+![chat-workflow](assets/chat-workflow.png)
 **Penjelasan Alur:**
+
 1. Pengguna memasukkan pertanyaan melalui Frontend.
 2. Backend menerima kueri dan secara paralel melakukan pencarian konteks di **ChromaDB** (*Vector Search*).
 3. Di saat yang sama, kueri dikirim ke **Router Model** untuk diklasifikasikan apakah itu topik umum atau topik spesifik/serius (seperti medis, teknis, hukum).
 4. Hasil dokumen relevan dari ChromaDB dirangkai menjadi konteks (*context*).
 5. Berdasarkan hasil Router, kueri + konteks dikirimkan ke model **Specialist** (jika topik serius) atau **Generalist** (jika topik biasa).
 6. Model menghasilkan respons secara *streaming* dan langsung dikirim kembali ke pengguna.
+
+### Alur Endpoint Upload File
+
+Secara garis besar, aliran data dari saat *user* upload file hingga mendapat status upload adalah sebagai berikut:
+![upload-workflow](assets/upload-workflow.png)
+**Penjelasan Alur:**
+
+1. Pengguna mengunggah file PDF ke dalam frontend
+2. Backend melakukan validasi ekstensi file (hanya .txt dan .pdf yang diizinkan).
+3. Jika ekstensi tidak didukung, sistem melempar HTTPException dan mengembalikannya ke user.
+4. Jika didukung, file di-parsing dan disimpan ke Local Disk.
+5. Setelah itu, baca konten file dan lakukan Recursive Chunking.
+6. Lakukan proses embedding menggunakan model all-MiniLM-L6-v2 dan simpan ke ChromaDB.
+7. Terakhir, kembalikan respon berupa status, jumlah chunk, dan isi konten file ke user.
 
 ## 3. Penjelasan RAG Pipeline
 
@@ -57,12 +59,12 @@ Pipeline *Retrieval-Augmented Generation* (RAG) pada proyek ini terbagi menjadi 
 
 ## 4. Alasan Pemilihan Model & Teknologi
 
-- **FastAPI**: Sangat ringan, asinkron (*async*), dan cepat. Sangat cocok untuk meng-host endpoint *streaming* SSE dari LLM.
+- **FastAPI**: Sangat ringan, asinkron (*async*), dan cepat. Sangat cocok untuk host endpoint *streaming* SSE dari LLM.
 - **React & Vite**: Ekosistem modern yang sangat cepat dalam proses *build*, mendukung komponen reaktif seperti indikator pengetikan, formating Markdown, dan *highlighting* sintaks kode secara *real-time*.
-- **ChromaDB**: *Vector database* ini tidak memerlukan *setup server* khusus (*serverless/local*), ringan, dan cukup mumpuni untuk proyek skala menengah.
+- **ChromaDB**: *Vector database* ini tidak memerlukan *setup server* khusus (*serverless/local*) dan ringan. Setup untuk ChromaDB juga cukup mudah dan tidak memerlukan banyak konfigurasi.
 - **Sistem Model Router**:
-  - **Llama-3.2-1B-Instruct (Router)**: Berukuran sangat kecil dan responsif, digunakan murni untuk memprediksi label kelas (topik) dalam milidetik.
-  - **Llama-4-Scout-17B-16E-Instruct (Specialist)**: Model besar, cerdas, mampu menangani penalaran logika yang kompleks untuk pertanyaan berat (Hukum, IT, Medis).
+  - **Llama-3.2-1B-Instruct (Router)**: Berukuran sangat kecil dan responsif, digunakan murni untuk klasifikasi query dari pengguna dalam waktu yang singkat.
+  - **Llama-4-Scout-17B-16E-Instruct (Specialist)**: Model besar dan cerdas, mampu menangani penalaran logika yang kompleks untuk pertanyaan berat (Hukum, IT, Medis).
   - **Llama-3.1-8B-Instruct (Generalist)**: Cukup mumpuni untuk percakapan sehari-hari, *small talk*, atau ringkasan sederhana tanpa membebani *resource* komputasi.
 - **all-MiniLM-L6-v2**: Model *embedding* dari HuggingFace yang sangat ringan namun memiliki akurasi yang solid untuk perbandingan makna (*semantic search*).
 
@@ -71,31 +73,41 @@ Pipeline *Retrieval-Augmented Generation* (RAG) pada proyek ini terbagi menjadi 
 Berikut adalah langkah-langkah untuk menjalankan RAG-Chatbot secara lokal:
 
 **Prasyarat:**
-- Python versi 3.12 atau ke atas.
+
+- Python versi 3.14 atau ke atas.
 - Node.js versi 18+ dan NPM/Yarn.
 - Dependensi manajemen berbasis pip atau `uv`.
 
 **Langkah Menjalankan Backend:**
+
 1. Buka terminal dan masuk ke direktori backend: `cd src/backend`
 2. Atur *environment variables* di dalam file `.env` (masukkan konfigurasi model LLM Anda).
-3. Instal semua dependensi menggunakan package manager yang Anda pilih (misal pip): `pip install -r pyproject.toml` atau `pip install .`.
+3. Instal semua dependensi menggunakan package manager yang Anda pilih (misal uv): `uv sync`.
 4. Jalankan server FastAPI dengan uvicorn:
+
    ```bash
    fastapi dev main.py
    # atau
    uvicorn main:app --reload --port 8000
+   # atau
+   uv run fastapi
    ```
 
 **Langkah Menjalankan Frontend:**
+
 1. Buka terminal baru dan masuk ke direktori frontend: `cd src/frontend`
 2. Instal semua package Node.js:
+
    ```bash
    npm install
    ```
+
 3. Jalankan *development server* Vite:
+
    ```bash
    npm run dev
    ```
+
 4. Buka browser dan navigasikan ke `http://localhost:5173`.
 
 ## 6. Trade-off Teknis
@@ -105,7 +117,7 @@ Berikut adalah langkah-langkah untuk menjalankan RAG-Chatbot secara lokal:
   - *Kontra*: Terdapat sedikit penundaan (latensi) awal karena kueri harus diklasifikasikan oleh *router* sebelum dialihkan ke LLM utama.
 - **ChromaDB Local vs VectorDB Cloud (Pinecone/Weaviate):**
   - *Pro*: Data 100% tersimpan secara lokal dan privasi terjamin; tanpa ada batasan biaya API tambahan.
-  - *Kontra*: Kurang skalabel jika beban mencapai skala masif, dan ukuran penyimpanan bergantung langsung pada *disk space* mesin peladen (server).
+  - *Kontra*: Kurang skalabel jika beban mencapai skala masif, dan ukuran penyimpanan bergantung langsung pada *disk space* server.
 
 ## 7. Limitasi Sistem
 
@@ -116,6 +128,7 @@ Berikut adalah langkah-langkah untuk menjalankan RAG-Chatbot secara lokal:
 ## 8. Rencana Pengembangan Lanjutan
 
 1. **Database Riwayat Percakapan**: Menambahkan *database relasional* (seperti PostgreSQL/SQLite) untuk menangkap UUID *chat* dan menyimpan riwayat percakapan agar *user* bisa melanjutkan sesi mereka kapanpun.
-2. **Evaluasi Otomatis (RAGAS)**: Mengimplementasikan pipeline evaluasi otomatis dari *framework* RAGAS untuk menilai metrik relevansi jawaban (*answer relevancy*) dan seberapa presisi hasil penelusurannya (*context precision*).
-3. **Fine-Tuning (LoRA)**: Melakukan *fine-tuning* ringan dengan LoRA pada model untuk secara spesifik mengenali gaya bahasa atau kueri khusus domain industri (*domain-specific queries*).
-4. **Integrasi Ekstraksi OCR**: Menambahkan modul tambahan seperti Tesseract/PyTesseract agar sistem sanggup membaca isi gambar di dalam PDF yang diunggah.
+2. **Evaluasi Kustom RAG**: Mengembangkan sistem evaluasi kustom yang membaca dataset pengujian dari `evaluation.jsonl` dan membandingkan *retrieved contexts* dan *response* model dengan jawaban referensi tanpa bergantung pada modul eksternal RAGAS.
+3. **Peningkatan Chunking**: Menerapkan metode *recursive chunking* pada pemrosesan dokumen untuk memecah teks berdasarkan semantik dan struktur alih-alih pemotongan karakter statis.
+4. **Fine-Tuning (LoRA)**: Melanjutkan inisiatif *fine-tuning* (direktori `loramodel` telah disiapkan) dengan LoRA pada model untuk secara spesifik mengenali gaya bahasa atau kueri khusus domain industri.
+5. **Integrasi Ekstraksi OCR**: Menambahkan modul tambahan seperti Tesseract/PyTesseract agar sistem sanggup membaca isi gambar di dalam PDF yang diunggah.

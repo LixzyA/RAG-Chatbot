@@ -246,3 +246,4 @@ dist-ssr
 chroma/
 *.jsonl
 report.md
+.chroma
