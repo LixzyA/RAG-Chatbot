@@ -1,5 +1,6 @@
 from typing import List
 from fastapi import UploadFile
+from langchain_core.documents import Document
 from . import models
 import logging
 import pathlib
@@ -8,9 +9,10 @@ import os
 from pdfminer.high_level import extract_text as pdf_extract_text
 import asyncio
 from vectordb.core import add_data_to_collection
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 ALLOWED_FILE_TYPE = ['.txt', '.pdf']
-CHUNK_SIZE = 1024
+CHUNK_SIZE = 512
 OVERLAP = int(0.2 * CHUNK_SIZE)
 
 async def upload_file(file: UploadFile, client) -> models.UploadFileResponse:
@@ -44,10 +46,9 @@ async def upload_file(file: UploadFile, client) -> models.UploadFileResponse:
     else:
         text_content = content.decode("utf-8")
     # Chunk text
-    chunks = await asyncio.to_thread(chunk_text, text_content, chunk_size=CHUNK_SIZE, overlap=OVERLAP)
+    chunks = await asyncio.to_thread(recursive_chunk, text_content, chunk_size=CHUNK_SIZE, overlap=OVERLAP)
     # Upload to Chroma
     await add_data_to_collection(data={"documents": chunks, "metadatas": [{"file": file.filename}] * len(chunks), "ids": [f"{file.filename}_{i}" for i in range(len(chunks))]}, collection=collection)
-
 
     return models.UploadFileResponse(
         status="success",
@@ -63,9 +64,8 @@ def extract_text(file_path: str) -> str:
     except Exception as e:
         logging.error(f"Failed to process PDF file: {str(e)}")
         raise PDFProcessingException(message=str(e))
-
     
-        
+# Fixed size chunking with overlap
 def chunk_text(text: str, chunk_size: int, overlap: int) -> List[str]:
     """
         Fixed size chunking with overlap
@@ -86,4 +86,15 @@ def chunk_text(text: str, chunk_size: int, overlap: int) -> List[str]:
         start += (chunk_size - overlap)
     return chunks
 
-# TODO: implement semantic chunking
+def recursive_chunk(text: str, chunk_size: int, overlap: int) -> List[str]:
+    if overlap >= chunk_size:
+        raise OverlapException(message="Overlap must be smaller than chunk size")
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=overlap,
+        length_function=len,
+        is_separator_regex=False,
+    )
+    documents = text_splitter.create_documents([text])
+    chunked_texts = [doc.page_content for doc in documents]
+    return chunked_texts 
