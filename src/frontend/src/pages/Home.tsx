@@ -5,9 +5,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 // ── Types ──────────────────────────────────────────────────────────
 
 interface HealthResponse {
-  vector_db: string;
-  llm: string;
-  storage: string;
+  chroma_status: string;
+  llm_status: string;
+  storage_status: string;
 }
 
 type ServiceKey = keyof HealthResponse;
@@ -21,9 +21,9 @@ interface ServiceMeta {
 // ── Constants ──────────────────────────────────────────────────────
 
 const SERVICE_META: Record<ServiceKey, ServiceMeta> = {
-  vector_db: {
-    label: "ChromaDB",
-    description: "Vector database",
+  chroma_status: {
+    label: "Vector DB",
+    description: "Chroma DB",
     icon: (
       <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
         <ellipse cx="12" cy="5" rx="9" ry="3" />
@@ -32,7 +32,7 @@ const SERVICE_META: Record<ServiceKey, ServiceMeta> = {
       </svg>
     ),
   },
-  llm: {
+  llm_status: {
     label: "Llama LLM",
     description: "Language model",
     icon: (
@@ -46,7 +46,7 @@ const SERVICE_META: Record<ServiceKey, ServiceMeta> = {
       </svg>
     ),
   },
-  storage: {
+  storage_status: {
     label: "Local Disk",
     description: "File storage",
     icon: (
@@ -57,19 +57,19 @@ const SERVICE_META: Record<ServiceKey, ServiceMeta> = {
   },
 };
 
-const SERVICE_ORDER: ServiceKey[] = ["vector_db", "llm", "storage"];
+const SERVICE_ORDER: ServiceKey[] = ["chroma_status", "llm_status", "storage_status"];
 
 // ── Helpers ────────────────────────────────────────────────────────
 
 function statusColor(status: string | null): string {
   if (!status) return "bg-muted text-muted-foreground";
-  if (status === "healthy") return "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400";
+  if (status === "ok") return "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400";
   return "bg-red-500/10 text-red-600 dark:text-red-400";
 }
 
 function statusDot(status: string | null): string {
   if (!status) return "bg-muted-foreground/30";
-  if (status === "healthy") return "bg-emerald-500";
+  if (status === "ok") return "bg-emerald-500";
   return "bg-red-500";
 }
 

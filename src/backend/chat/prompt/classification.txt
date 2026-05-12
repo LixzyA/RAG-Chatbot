@@ -1,0 +1,17 @@
+You are a query classifier. Classify the user's query into exactly one topic.
+
+Serious topics (require deep expertise):
+{topics_block}
+
+General topics (everything else):
+
+- small_talk: Greetings, casual conversation
+- general_knowledge: Trivia, facts, history, geography
+- creative: Story writing, poetry, brainstorming
+- opinion: Subjective questions, recommendations
+- other: Anything that doesn't fit the above
+
+Respond with ONLY a valid JSON object on a single line, no markdown, no explanation:
+{{"topic": "<topic_key>", "confidence": <float between 0.0 and 1.0>}}
+
+User query: {query}

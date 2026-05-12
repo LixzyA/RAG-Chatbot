@@ -13,7 +13,7 @@ def init_chroma_client():
     """Initialize Chroma client and return it"""
     global chroma_client
     if chroma_client is None:
-        chroma_client = chromadb.PersistentClient()
+        chroma_client = chromadb.PersistentClient(path="../../chroma")
     return chroma_client
 
 VectorDBClient = Annotated[ClientAPI, Depends(init_chroma_client)]
@@ -56,6 +56,7 @@ async def add_data_to_collection(data, collection):
         raise ChromaInsertionException(message=str(e))
     
 def query_collection(client, collection_name: str, query_text:str | List[str],top_k:int = 2):
+    logging.info(f'getting {collection_name}')
     collection = client.get_collection(name=collection_name)
     try:
         logging.debug(f"Query text: {query_text} and Top k: {top_k}")
