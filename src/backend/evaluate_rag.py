@@ -21,7 +21,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 vectordb_client = None
 llm_client: AsyncInferenceClient = None
 
-CRITIQUE_MODEL = "meta-llama/Llama-3.1-8B-Instruct"
+CRITIQUE_MODEL = "meta-llama/Llama-4-Scout-17B-16E-Instruct"
 
 # ---------------------------------------------------------------------------
 # Critique prompts
@@ -156,7 +156,7 @@ async def evaluate_rag() -> list[dict]:
 
     eval_data: list[dict] = []
 
-    with open("./chat/evaluation.jsonl", encoding="utf-8") as f:
+    with open("./evaluation.jsonl", encoding="utf-8") as f:
         lines = [json.loads(line) for line in f if line.strip()]
 
     logging.info(f"Loaded {len(lines)} evaluation sample(s).")
@@ -230,7 +230,7 @@ async def main():
 
     # Save full results to a timestamped JSON file
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = f"./chat/eval_results_{timestamp}.json"
+    output_path = f"./eval_results_{timestamp}.json"
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump({"summary": summary, "results": eval_data}, f, ensure_ascii=False, indent=2)
 
