@@ -91,7 +91,7 @@ export default function Chat() {
         const controller = new AbortController();
         abortRef.current = controller;
 
-        const res = await fetch("http://localhost:8000/chat/", {
+        const res = await fetch("http://localhost:8000/chat/v2", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ prompt: trimmed, top_k: 10 }),
@@ -267,20 +267,18 @@ export default function Chat() {
             >
               <Card
                 size="sm"
-                className={`max-w-[85%] sm:max-w-[75%] ${
-                  msg.role === "user"
+                className={`max-w-[85%] sm:max-w-[75%] ${msg.role === "user"
                     ? "bg-primary text-primary-foreground ring-primary/20"
                     : "bg-card ring-foreground/10"
-                }`}
+                  }`}
               >
                 <CardContent>
                   {/* Sender label */}
                   <p
-                    className={`mb-1.5 text-[11px] font-semibold uppercase tracking-wider ${
-                      msg.role === "user"
+                    className={`mb-1.5 text-[11px] font-semibold uppercase tracking-wider ${msg.role === "user"
                         ? "text-primary-foreground/70"
                         : "text-muted-foreground"
-                    }`}
+                      }`}
                   >
                     {msg.role === "user" ? "You" : "Assistant"}
                   </p>
