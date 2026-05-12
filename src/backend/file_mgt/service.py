@@ -25,7 +25,7 @@ async def upload_file(file: UploadFile, client) -> models.UploadFileResponse:
         raise FileTypeNotSupportedException(file_type=file_type)
     
     # Get chroma collection
-    collection = client.get_collection(name="file_mgt")
+    collection = client.get_collection(name=os.getenv("CHROMA_COLLECTION_NAME", "file_corpus"))
 
     content = await file.read()
     logging.info(f"File {file.filename} uploaded successfully")
