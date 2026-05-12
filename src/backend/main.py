@@ -4,8 +4,9 @@ from logger import configure_logging, LogLevels
 from dotenv import load_dotenv
 from api import conf_routing
 from chat.core import init_llm, llm_healthcheck
-from vectordb.core import init_chroma_client 
+from vectordb.core import init_chroma_client
 from fastapi.middleware.cors import CORSMiddleware
+import os
 
 load_dotenv()
 
@@ -14,6 +15,7 @@ async def lifespan(app: FastAPI):
     init_llm()
     configure_logging(LogLevels.info)
     init_chroma_client()
+    
     yield
 
 
