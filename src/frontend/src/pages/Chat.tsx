@@ -15,6 +15,8 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { cn } from "@/lib/utils";
+import { useAuth } from "@/contexts/AuthContext";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -24,11 +26,21 @@ interface Message {
   content: string;
 }
 
+interface ChatSummary {
+  chat_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+}
+
 // ── Helpers ────────────────────────────────────────────────────────
 
 function generateUUID(): string {
   return crypto.randomUUID();
 }
+
+const API_BASE = "http://localhost:8000";
 
 // ── Component ──────────────────────────────────────────────────────
 
@@ -38,10 +50,13 @@ export default function Chat() {
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [chatList, setChatList] = useState<ChatSummary[]>([]);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const initialLoadDone = useRef(false);
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
@@ -53,10 +68,110 @@ export default function Chat() {
     if (!streaming) inputRef.current?.focus();
   }, [streaming]);
 
+  const { token } = useAuth();
+
+  // Helper to build headers with auth
+  const authHeaders = useCallback(
+    (extra?: Record<string, string>): Record<string, string> => ({
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...extra,
+    }),
+    [token]
+  );
+
+  // ── Load messages for a given chatId from backend ───────────────
+
+  const loadChatHistory = useCallback(
+    async (cid: string) => {
+      if (!token) return false;
+      try {
+        const res = await fetch(`${API_BASE}/chat/history/${cid}`, {
+          headers: authHeaders(),
+        });
+        if (!res.ok) {
+          if (res.status === 404) {
+            setMessages([]);
+            return true; // 404 is "ok" — just empty
+          }
+          console.error(`loadChatHistory ${cid.slice(0, 8)}: ${res.status} ${res.statusText}`);
+          return false;
+        }
+        const data = await res.json();
+        setMessages(data.messages ?? []);
+        return true;
+      } catch (err) {
+        console.error(`loadChatHistory ${cid.slice(0, 8)}:`, err);
+        return false;
+      }
+    },
+    [token, authHeaders]
+  );
+
+  // ── Fetch chat list (all user's histories) ──────────────────────
+
+  const fetchChatList = useCallback(async () => {
+    if (!token) return [];
+    try {
+      const res = await fetch(`${API_BASE}/chat/histories`, {
+        headers: authHeaders(),
+      });
+      if (res.ok) {
+        return (await res.json()) as ChatSummary[];
+      }
+      console.error(`fetchChatList: ${res.status} ${res.statusText}`);
+    } catch (err) {
+      console.error("fetchChatList:", err);
+    }
+    return [];
+  }, [token, authHeaders]);
+
+  // ── On mount: load chat list, then open most recent chat ────────
+
+  useEffect(() => {
+    if (!token || initialLoadDone.current) return;
+    let cancelled = false;
+
+    (async () => {
+      const list = await fetchChatList();
+      if (cancelled) return;
+      setChatList(list);
+
+      if (list.length > 0) {
+        // Open the most recent chat
+        const cid = list[0].chat_id;
+        setChatId(cid);
+        await loadChatHistory(cid);
+      }
+      initialLoadDone.current = true;
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
   // Cleanup abort controller on unmount
   useEffect(() => {
     return () => abortRef.current?.abort();
   }, []);
+
+  // ── Switch to a different chat ──────────────────────────────────
+
+  const switchChat = useCallback(
+    async (newChatId: string) => {
+      abortRef.current?.abort();
+      setChatId(newChatId);
+      setMessages([]);
+      setInput("");
+      setError(null);
+      setStreaming(false);
+      setSidebarOpen(false);
+      await loadChatHistory(newChatId);
+    },
+    [loadChatHistory]
+  );
 
   // ── Submit handler ───────────────────────────────────────────────
 
@@ -91,10 +206,10 @@ export default function Chat() {
         const controller = new AbortController();
         abortRef.current = controller;
 
-        const res = await fetch("http://localhost:8000/chat/v2", {
+        const res = await fetch(`${API_BASE}/chat/v2`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt: trimmed, top_k: 10 }),
+          headers: authHeaders(),
+          body: JSON.stringify({ prompt: trimmed, top_k: 10, chat_id: chatId }),
           signal: controller.signal,
         });
 
@@ -125,7 +240,6 @@ export default function Chat() {
 
           for (const line of lines) {
             if (line.startsWith("event: done")) {
-              // Stream finished
               break;
             }
             if (line.startsWith("data: ")) {
@@ -159,80 +273,186 @@ export default function Chat() {
       } finally {
         setStreaming(false);
         abortRef.current = null;
+        // Refresh the sidebar list (fire-and-forget, never touches messages)
+        fetchChatList().then((list) => {
+          if (list) setChatList(list);
+        });
       }
     },
-    [input, streaming]
+    [input, streaming, chatId, authHeaders, fetchChatList]
   );
 
   // ── New chat handler ─────────────────────────────────────────────
 
   const handleNewChat = () => {
     abortRef.current?.abort();
-    setChatId(generateUUID());
+    const newId = generateUUID();
+    setChatId(newId);
     setMessages([]);
     setInput("");
     setError(null);
     setStreaming(false);
-    inputRef.current?.focus();
+    setSidebarOpen(false);
+    // Focus after state update
+    setTimeout(() => inputRef.current?.focus(), 0);
   };
 
   // ── Render ───────────────────────────────────────────────────────
 
   return (
-    <div className="flex min-h-svh flex-col">
-      {/* Top bar */}
-      <header className="sticky top-14 z-10 flex items-center justify-between border-b border-border bg-background/80 px-4 py-3 backdrop-blur-md sm:px-6">
-        <div className="flex flex-col gap-0.5">
-          <h1 className="text-lg font-semibold tracking-tight">Chat</h1>
-          <p className="text-muted-foreground font-mono text-[11px]">
-            {chatId.slice(0, 8)}…
-          </p>
-        </div>
-
-        {/* New Chat button with confirmation dialog */}
-        <AlertDialog>
-          <AlertDialogTrigger asChild>
-            <Button id="new-chat-btn" variant="outline" size="sm" disabled={messages.length === 0 && !streaming}>
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                data-icon="inline-start"
-                className="mr-1"
-              >
-                <line x1="12" y1="5" x2="12" y2="19" />
-                <line x1="5" y1="12" x2="19" y2="12" />
+    <div className="flex h-[calc(100svh-3.5rem)] overflow-hidden">
+      {/* ── History sidebar ─────────────────────────────────────── */}
+      {/* Mobile overlay (only when open) — hidden on desktop */}
+      {sidebarOpen && (
+        <aside className="fixed left-0 top-14 z-20 flex h-[calc(100svh-3.5rem)] w-72 flex-col border-r border-border bg-background sm:hidden">
+          <div className="flex items-center justify-between border-b border-border px-4 py-3">
+            <h2 className="text-sm font-semibold">Chat History</h2>
+            <button
+              onClick={() => setSidebarOpen(false)}
+              className="rounded-md p-1 text-muted-foreground hover:bg-muted"
+              aria-label="Close sidebar"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
               </svg>
-              New Chat
-            </Button>
-          </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Start a new chat?</AlertDialogTitle>
-              <AlertDialogDescription>
-                This will clear the current chat history. This action cannot be
-                undone.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction id="confirm-new-chat-btn" onClick={handleNewChat}>
-                Continue
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      </header>
+            </button>
+          </div>
+          <nav className="flex-1 overflow-y-auto p-2">
+            {chatList.length === 0 ? (
+              <p className="px-2 py-8 text-center text-xs text-muted-foreground">No past chats yet</p>
+            ) : (
+              <ul className="flex flex-col gap-1">
+                {chatList.map((chat) => (
+                  <li key={chat.chat_id}>
+                    <button
+                      onClick={() => switchChat(chat.chat_id)}
+                      className={cn(
+                        "w-full rounded-md px-3 py-2 text-left text-xs transition-colors",
+                        chat.chat_id === chatId
+                          ? "bg-primary/10 text-primary font-medium"
+                          : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                      )}
+                    >
+                      <span className="line-clamp-1">{chat.title}</span>
+                      <span className="mt-0.5 block text-[10px] opacity-60">
+                        {chat.message_count} message{chat.message_count !== 1 ? "s" : ""}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </nav>
+        </aside>
+      )}
 
-      {/* Messages area */}
-      <main className="flex-1 overflow-y-auto px-4 py-6 sm:px-6">
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
+      {/* Desktop sidebar — responds to burger toggle */}
+      <aside className={cn(
+        "hidden flex-col border-r border-border bg-background w-72 shrink-0",
+        sidebarOpen ? "sm:flex" : "sm:hidden"
+      )}>
+        <nav className="flex-1 overflow-y-auto p-2">
+          {chatList.length === 0 ? (
+            <p className="px-2 py-8 text-center text-xs text-muted-foreground">No past chats yet</p>
+          ) : (
+            <ul className="flex flex-col gap-1">
+              {chatList.map((chat) => (
+                <li key={chat.chat_id}>
+                  <button
+                    onClick={() => switchChat(chat.chat_id)}
+                    className={cn(
+                      "w-full rounded-md px-3 py-2 text-left text-xs transition-colors",
+                      chat.chat_id === chatId
+                        ? "bg-primary/10 text-primary font-medium"
+                        : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                    )}
+                  >
+                    <span className="line-clamp-1">{chat.title}</span>
+                    <span className="mt-0.5 block text-[10px] opacity-60">
+                      {chat.message_count} message{chat.message_count !== 1 ? "s" : ""}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </nav>
+      </aside>
+
+      {/* ── Overlay for mobile sidebar ── */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-10 bg-black/30 sm:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      {/* ── Main chat area — scrolls independently ──────────────── */}
+      <div className="flex flex-1 flex-col overflow-y-auto">
+        {/* Top bar */}
+        <header className="sticky top-14 z-10 flex items-center justify-between border-b border-border bg-background/80 px-4 py-3 backdrop-blur-md sm:px-6">
+          <div className="flex items-center gap-3">
+            {/* History toggle */}
+            <button
+              onClick={() => setSidebarOpen((prev) => !prev)}
+              className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              aria-label="Toggle chat history"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="3" y1="6" x2="21" y2="6" />
+                <line x1="3" y1="12" x2="21" y2="12" />
+                <line x1="3" y1="18" x2="21" y2="18" />
+              </svg>
+            </button>
+
+            <h1 className="text-lg font-semibold tracking-tight">Chat</h1>
+          </div>
+
+          {/* New Chat button with confirmation dialog */}
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button id="new-chat-btn" variant="outline" size="sm" disabled={messages.length === 0 && !streaming}>
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  data-icon="inline-start"
+                  className="mr-1"
+                >
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+                New Chat
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Start a new chat?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This will clear the current chat history. This action cannot be
+                  undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction id="confirm-new-chat-btn" onClick={handleNewChat}>
+                  Continue
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </header>
+
+        {/* Messages area */}
+        <main className="flex-1 overflow-y-auto px-4 py-6 sm:px-6">
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
           {messages.length === 0 && !streaming && (
             <div className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-center">
               <div className="flex size-14 items-center justify-center rounded-full bg-muted">
@@ -479,6 +699,9 @@ export default function Chat() {
           </Button>
         </form>
       </footer>
+      {/* closes main chat area div */}
+    </div>
+    {/* closes outer flex div */}
     </div>
   );
 }

@@ -5,11 +5,17 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "aiosqlite>=0.21.0",
     "chromadb>=1.5.9",
     "dotenv>=0.9.9",
     "fastapi[standard]>=0.136.1",
     "huggingface-hub>=1.14.0",
+    "jwt>=1.4.0",
     "langchain-text-splitters>=1.1.2",
     "pdfminer-six>=20260107",
+    "pwdlib[argon2]>=0.3.0",
     "pydantic>=2.13.4",
+    "pyjwt>=2.8.0",
+    "pyyaml>=6.0.1",
+    "sqlalchemy[asyncio]>=2.0.38",
 ]

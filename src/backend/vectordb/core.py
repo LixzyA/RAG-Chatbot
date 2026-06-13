@@ -1,10 +1,7 @@
-import asyncio
 import chromadb
 from chromadb.api import ClientAPI
 from fastapi import Depends
 from typing import Annotated, List
-import logging
-from exception import CreateCollectionException, ChromaQueryException, ChromaInsertionException, CollectionNotFoundException
 from datetime import datetime
 
 chroma_client= None
@@ -18,63 +15,25 @@ def init_chroma_client():
 
 VectorDBClient = Annotated[ClientAPI, Depends(init_chroma_client)]
 
-def _get_collection(client, collection_name: str = "file_mgt"):
-    if collection_name not in client.list_collections():
-        raise CollectionNotFoundException(message=f"{collection_name} Collection does not exist")
-    return client.get_collection(name=collection_name)
+def _get_or_create_collection(client, name:str):
+    collection = client.get_or_create_collection(
+        name=name,
+        metadata={
+        "description": "collection for storing vector embeddings",
+        "created": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+    )
+    return collection
 
-    
-def create_collection(client, name: str):
-    if name in client.list_collections():
-        logging.warning(f"{name} Collection exists")
-        return client.list_collections()
-    
-    try:
-        client.create_collection(name=name, metadata={
-            "description": "collection for storing vector embeddings",
-            "created": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        })
-        logging.info(f"{name} Collection created successfully")
-        return client.list_collections()
-    except Exception as e:
-        logging.error(f"Failed to create collection {name}: {str(e)}")
-        raise CreateCollectionException(message=str(e))
+def add_data_to_collection(data, collection):
+    collection.add(documents=data["documents"], metadatas=data["metadatas"], ids=data["ids"])
 
-
-async def add_data_to_collection(data, collection):    
-    try:
-        await asyncio.to_thread(
-            collection.add,
-            documents=data["documents"],
-            metadatas=data["metadatas"],
-            ids=data["ids"]
-        )
-        logging.info(f"{len(data['ids'])} data added to collection successfully")
-        return {"status": "200", "detail": "Data added successfully"}
-    except Exception as e:
-        logging.error(f"Failed to insert data into Chroma: {str(e)}")
-        raise ChromaInsertionException(message=str(e))
-    
 def query_collection(client, collection_name: str, query_text:str | List[str],top_k:int = 2):
-    logging.info(f'getting {collection_name}')
     collection = client.get_collection(name=collection_name)
-    try:
-        logging.debug(f"Query text: {query_text} and Top k: {top_k}")
-        results=collection.query(
-            query_texts=[query_text] if isinstance(query_text, str) else query_text, 
-            n_results=top_k)
-        logging.debug(f"Query results: {results}")
-        return results
-    except Exception as e:
-        logging.error(f"Failed to query collection {collection}: {str(e)}")
-        raise ChromaQueryException(message=str(e))
+    return collection.query(query_texts=[query_text] if isinstance(query_text, str) else query_text, n_results=top_k)
     
 def get_collection_by_id(ids: int | List[int], collection):
-    try:
-        logging.debug(f"Get collection with id: {ids}")
-        results=collection.get(ids=[ids] if isinstance(ids, int) else ids)
-        logging.debug(f"Get collection results: {results}")
-        return results
-    except Exception as e:
-        logging.error(f"Failed to get collection with id {id}: {str(e)}")
-        raise ChromaQueryException(message=str(e))
+    return collection.get(ids=[ids] if isinstance(ids, int) else ids)
+
+def get_all_collections(client):
+    return client.list_collections()

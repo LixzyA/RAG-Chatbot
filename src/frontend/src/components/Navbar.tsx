@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/contexts/AuthContext";
 
 // ── Nav items ──────────────────────────────────────────────────────
 
@@ -8,6 +9,7 @@ interface NavItem {
   label: string;
   to: string;
   icon: React.ReactNode;
+  protected?: boolean;
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -29,6 +31,7 @@ const NAV_ITEMS: NavItem[] = [
         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
       </svg>
     ),
+    protected: true,
   },
   {
     label: "Files",
@@ -39,6 +42,7 @@ const NAV_ITEMS: NavItem[] = [
         <path d="M14 2v4a2 2 0 0 0 2 2h4" />
       </svg>
     ),
+    protected: true,
   },
 ];
 
@@ -47,9 +51,22 @@ const NAV_ITEMS: NavItem[] = [
 export default function Navbar() {
   const [menuOpen, setMenuOpen] = useState(false);
   const location = useLocation();
+  const navigate = useNavigate();
+  const { user, logout } = useAuth();
 
   const isActive = (to: string) =>
     to === "/" ? location.pathname === "/" : location.pathname.startsWith(to);
+
+  // Filter nav items based on auth status
+  const visibleItems = NAV_ITEMS.filter(
+    (item) => !item.protected || user
+  );
+
+  const handleLogout = () => {
+    logout();
+    setMenuOpen(false);
+    navigate("/");
+  };
 
   return (
     <nav
@@ -74,7 +91,7 @@ export default function Navbar() {
 
         {/* Desktop links */}
         <ul className="hidden items-center gap-1 sm:flex">
-          {NAV_ITEMS.map((item) => (
+          {visibleItems.map((item) => (
             <li key={item.to}>
               <Link
                 to={item.to}
@@ -90,6 +107,30 @@ export default function Navbar() {
               </Link>
             </li>
           ))}
+
+          {/* Auth section */}
+          <li className="ml-2 flex items-center gap-2 border-l border-border pl-3">
+            {user ? (
+              <>
+                <span className="text-xs text-muted-foreground">
+                  {user.username}
+                </span>
+                <button
+                  onClick={handleLogout}
+                  className="rounded-md px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  Logout
+                </button>
+              </>
+            ) : (
+              <Link
+                to="/login"
+                className="rounded-md px-3 py-1.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
+              >
+                Sign In
+              </Link>
+            )}
+          </li>
         </ul>
 
         {/* Hamburger button — mobile only */}
@@ -121,11 +162,11 @@ export default function Navbar() {
       <div
         className={cn(
           "overflow-hidden border-t border-border transition-all duration-200 ease-in-out sm:hidden",
-          menuOpen ? "max-h-60 opacity-100" : "max-h-0 border-t-transparent opacity-0"
+          menuOpen ? "max-h-80 opacity-100" : "max-h-0 border-t-transparent opacity-0"
         )}
       >
         <ul className="flex flex-col gap-1 px-4 py-3">
-          {NAV_ITEMS.map((item) => (
+          {visibleItems.map((item) => (
             <li key={item.to}>
               <Link
                 to={item.to}
@@ -142,6 +183,31 @@ export default function Navbar() {
               </Link>
             </li>
           ))}
+
+          {/* Mobile auth */}
+          <li className="border-t border-border pt-2 mt-1">
+            {user ? (
+              <div className="flex items-center justify-between px-3 py-2">
+                <span className="text-xs text-muted-foreground">
+                  {user.username}
+                </span>
+                <button
+                  onClick={handleLogout}
+                  className="rounded-md px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  Logout
+                </button>
+              </div>
+            ) : (
+              <Link
+                to="/login"
+                onClick={() => setMenuOpen(false)}
+                className="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
+              >
+                Sign In
+              </Link>
+            )}
+          </li>
         </ul>
       </div>
     </nav>

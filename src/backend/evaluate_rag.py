@@ -1,19 +1,19 @@
 import asyncio
 import json
-import logging
 import re
 from datetime import datetime
 
 from dotenv import load_dotenv
 load_dotenv()
 
+from logger import configure_logging
+logger = configure_logging(__name__)
+
 from vectordb.core import init_chroma_client
 from chat.core import init_llm
 from chat.service import get_answers, get_relevant_files
 from huggingface_hub import AsyncInferenceClient
 from chromadb.errors import NotFoundError as ChromaNotFoundError
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 # ---------------------------------------------------------------------------
 # Clients (initialized in main)
@@ -159,22 +159,55 @@ async def evaluate_rag() -> list[dict]:
     with open("./evaluation.jsonl", encoding="utf-8") as f:
         lines = [json.loads(line) for line in f if line.strip()]
 
-    logging.info(f"Loaded {len(lines)} evaluation sample(s).")
+    logger.info(f"Loaded {len(lines)} evaluation sample(s).")
 
     for i, row in enumerate(lines, 1):
         question = row["Question"]
         reference = row.get("Answer", "")
-        logging.info(f"[{i}/{len(lines)}] Evaluating: {question!r}")
+        logger.info(f"[{i}/{len(lines)}] Evaluating: {question!r}")
 
         # 1. Retrieve context
         try:
             files = get_relevant_files(vectordb_client, question, top_k=3)
             docs = files.get("documents") if files else None
             relevant_contexts: list[str] = docs[0] if docs and docs[0] else []
+
+            # Extract chunk details for logging
+            chunk_ids = files.get("ids", [[]])[0] if files else []
+            chunk_metadatas = files.get("metadatas", [[]])[0] if files else []
+            chunk_distances = files.get("distances", [[]])[0] if files else []
         except (ChromaNotFoundError, Exception) as e:
-            logging.warning(f"  Could not retrieve context (collection may be empty): {e}")
+            logger.warning(f"  Could not retrieve context (collection may be empty): {e}")
             relevant_contexts = []
+            chunk_ids, chunk_metadatas, chunk_distances = [], [], []
         context = "\n\n".join(relevant_contexts)
+
+        # Log retrieved chunks
+        retrieved_chunks: list[dict] = []
+        for idx, (cid, doc, meta, dist) in enumerate(
+            zip(
+                chunk_ids,
+                relevant_contexts,
+                chunk_metadatas or [{}] * len(chunk_ids),
+                chunk_distances or [0.0] * len(chunk_ids),
+            )
+        ):
+            preview = (doc[:200] + "…") if len(doc) > 200 else doc
+            chunk_info = {
+                "chunk_id": cid,
+                "distance": dist,
+                "metadata": meta,
+                "text_preview": preview,
+                "full_text": doc,
+            }
+            retrieved_chunks.append(chunk_info)
+            logger.info(
+                f"  Chunk {idx + 1}: id={cid} | distance={dist:.4f} | "
+                f"metadata={json.dumps(meta, default=str)} | preview={preview!r}"
+            )
+
+        if not retrieved_chunks:
+            logger.info("  No chunks retrieved for this question.")
 
         # 2. Generate answer
         response_chunks: list[str] = []
@@ -188,12 +221,13 @@ async def evaluate_rag() -> list[dict]:
         eval_data.append({
             "user_input": question,
             "retrieved_contexts": relevant_contexts,
+            "retrieved_chunks": retrieved_chunks,
             "response": response,
             "reference": reference,
             "critiques": critiques,
         })
 
-        logging.info(
+        logger.info(
             f"  groundedness={critiques['groundedness']['score']} | "
             f"relevance={critiques['relevance']['score']} | "
             f"standalone={critiques['standalone']['score']}"
@@ -223,7 +257,7 @@ async def main():
     vectordb_client = init_chroma_client()
     llm_client = init_llm()
 
-    logging.info("Starting RAG evaluation pipeline…")
+    logger.info("Starting RAG evaluation pipeline…")
     eval_data = await evaluate_rag()
 
     summary = _compute_summary(eval_data)

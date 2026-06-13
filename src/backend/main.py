@@ -1,22 +1,34 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
-from logger import configure_logging, LogLevels
+from logger import configure_logging
 from dotenv import load_dotenv
 from api import conf_routing
 from chat.core import init_llm, llm_healthcheck
 from vectordb.core import init_chroma_client
+from entity.base import init_db
 from fastapi.middleware.cors import CORSMiddleware
+import asyncio
 import os
+
+logger = configure_logging(__name__)
 
 load_dotenv()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger.info("Starting up FastAPI application...")
+    
     init_llm()
-    configure_logging(LogLevels.info)
     init_chroma_client()
     
+    async def run_init_db():
+        await init_db()
+        logger.info("Database initialization completed.")
+        
+    asyncio.create_task(run_init_db())
+    
     yield
+    logger.info("Shutting down FastAPI application...")
 
 
 app = FastAPI(lifespan=lifespan)

@@ -206,6 +206,9 @@ tempCodeRunnerFile.py
 # Ruff stuff:
 .ruff_cache/
 
+# Chat history data (JSON files generated per chat session)
+src/backend/chat/chat_history/
+
 # PyPI configuration file
 .pypirc
 

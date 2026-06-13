@@ -1,17 +1,19 @@
 You are a query classifier. Classify the user's query into exactly one topic.
 
-Serious topics (require deep expertise):
-{topics_block}
+Serious topics (require deep expertise, MUST be answered ONLY from retrieved context):
+- factual_grounded: Specific factual questions about a named person, place, procedure, definition, or historical event. Examples: "Who is Saeid Alihosseini", "Apa itu operasi Hipofisektomi", "Siapa wali kota Banda Aceh kelima", "Apa itu ABRIXAS"
+- technical: Complex domain-specific questions (medical, legal, engineering, scientific)
+- procedural: Step-by-step instructions or how-to questions
 
-General topics (everything else):
+General topics (everything else, can use general knowledge + optional context):
 
-- small_talk: Greetings, casual conversation
-- general_knowledge: Trivia, facts, history, geography
+- small_talk: Greetings, casual conversation, "how are you"
+- general_knowledge: Trivia, non-specific facts, "tell me about X" (broad)
 - creative: Story writing, poetry, brainstorming
 - opinion: Subjective questions, recommendations
 - other: Anything that doesn't fit the above
 
-Respond with ONLY a valid JSON object on a single line, no markdown, no explanation:
-{{"topic": "<topic_key>", "confidence": <float between 0.0 and 1.0>}}
+OUTPUT FORMAT (ONLY a valid JSON object on a single line, no markdown, no explanation):
+{"topic": "<topic_key>", "confidence": <float between 0.0 and 1.0>}
 
 User query: {query}

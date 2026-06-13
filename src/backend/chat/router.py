@@ -7,7 +7,7 @@ while general topics go to the generalist model.
 """
 
 import json
-import logging
+# import logging # [LOGGING REMOVED]
 import os
 import re
 
@@ -94,7 +94,7 @@ def _parse_classification(raw_text: str) -> dict:
         except (json.JSONDecodeError, ValueError, TypeError):
             pass
     
-    logging.warning(f"Failed to parse classification response: {raw_text!r}")
+    # [LOGGING REMOVED]
     return fallback
 
 
@@ -129,16 +129,12 @@ async def classify_query(llm_client, query: str) -> dict:
         raw = response.choices[0].message.content or ""
         classification = _parse_classification(raw)
         
-        logging.info(
-            f"Query classified — topic: {classification['topic']}, "
-            f"confidence: {classification['confidence']:.2f}, "
-            f"raw: {raw!r}"
-        )
+        # [LOGGING REMOVED]
         
         return classification
     
     except Exception as e:
-        logging.error(f"Router classification failed: {e}")
+        # [LOGGING REMOVED]
         # On failure, default to generalist (safe fallback)
         return {"topic": "other", "confidence": 0.0}
 
