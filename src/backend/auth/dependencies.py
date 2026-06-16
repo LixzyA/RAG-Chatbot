@@ -1,11 +1,4 @@
-"""
-FastAPI dependency injection for auth.
-
-Provides ``AuthenticatedUser`` — a dependency that extracts the current
-user from the ``Authorization: Bearer <token>`` header.
-"""
-
-from fastapi import Depends, HTTPException
+from fastapi import Depends
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Annotated, Optional

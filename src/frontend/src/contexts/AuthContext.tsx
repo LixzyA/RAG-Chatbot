@@ -6,6 +6,7 @@ import {
   useCallback,
   type ReactNode,
 } from "react";
+import { apiFetch } from "@/lib/api";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -29,8 +30,6 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 // ── Helpers ────────────────────────────────────────────────────────
-
-const API_BASE = "http://localhost:8000";
 
 function getStoredToken(): string | null {
   return localStorage.getItem("auth_token");
@@ -77,9 +76,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    fetch(`${API_BASE}/auth/me`, {
-      headers: { Authorization: `Bearer ${savedToken}` },
-    })
+    apiFetch("/auth/me", { requireAuth: true })
       .then((res) => {
         if (!res.ok) throw new Error("Token invalid");
         return res.json();
@@ -106,10 +103,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     formData.append("username", username);
     formData.append("password", password);
 
-    const res = await fetch(`${API_BASE}/auth/login`, {
+    const res = await apiFetch("/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: formData,
+      requireAuth: false,
     });
 
     if (!res.ok) {
@@ -128,10 +126,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const register = useCallback(
     async (username: string, email: string, password: string) => {
-      const res = await fetch(`${API_BASE}/auth/register`, {
+      const res = await apiFetch("/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, email, password }),
+        requireAuth: false,
       });
 
       if (!res.ok) {

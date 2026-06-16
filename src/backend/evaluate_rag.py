@@ -4,17 +4,17 @@ import re
 from datetime import datetime
 
 from dotenv import load_dotenv
-load_dotenv()
-
 from logger import configure_logging
-logger = configure_logging(__name__)
 
-from vectordb.core import init_chroma_client
+
+from vectordb.core import ChromaDB
 from chat.core import init_llm
 from chat.service import get_answers, get_relevant_files
 from huggingface_hub import AsyncInferenceClient
 from chromadb.errors import NotFoundError as ChromaNotFoundError
 
+load_dotenv()
+logger = configure_logging(__name__)
 # ---------------------------------------------------------------------------
 # Clients (initialized in main)
 # ---------------------------------------------------------------------------
@@ -254,7 +254,7 @@ def _compute_summary(eval_data: list[dict]) -> dict:
 async def main():
     global vectordb_client, llm_client
 
-    vectordb_client = init_chroma_client()
+    vectordb_client = ChromaDB()
     llm_client = init_llm()
 
     logger.info("Starting RAG evaluation pipeline…")

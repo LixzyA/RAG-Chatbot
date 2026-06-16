@@ -94,7 +94,6 @@ def _parse_classification(raw_text: str) -> dict:
         except (json.JSONDecodeError, ValueError, TypeError):
             pass
     
-    # [LOGGING REMOVED]
     return fallback
 
 
@@ -123,20 +122,16 @@ async def classify_query(llm_client, query: str) -> dict:
                 {"role": "user", "content": prompt},
             ],
             temperature=0.1,    # Low temperature for deterministic classification
-            max_tokens=64,      # Short response — just a JSON object
+            max_tokens=128,      # Short response — just a JSON object
         )
         
         raw = response.choices[0].message.content or ""
         classification = _parse_classification(raw)
         
-        # [LOGGING REMOVED]
-        
         return classification
     
-    except Exception as e:
-        # [LOGGING REMOVED]
-        # On failure, default to generalist (safe fallback)
-        return {"topic": "other", "confidence": 0.0}
+    except:
+        raise
 
 
 def is_serious_topic(classification: dict) -> bool:

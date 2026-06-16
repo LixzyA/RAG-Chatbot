@@ -4,6 +4,7 @@ Chat session entity - stores chat sessions with metadata.
 
 from sqlalchemy import ForeignKey, Index, Integer, Text, desc, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from .chat_message import ChatMessage
 
 from .base import Base
 

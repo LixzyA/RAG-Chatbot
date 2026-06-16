@@ -1,24 +1,16 @@
 import uuid
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi.sse import EventSourceResponse, ServerSentEvent
-from typing import Optional
 from . import service
 from vectordb.core import VectorDBClient
 from . import models
 from . import core
 from . import history as chat_history
 from auth.dependencies import AuthenticatedUser, OptionalAuthenticatedUser
-from entity.user import User
 from logger import configure_logging
 
 logger = configure_logging(__name__)
-
 router = APIRouter(prefix="/chat", tags=["chat"])
-
-
-# ---------------------------------------------------------------------------
-# Streaming chat endpoints
-# ---------------------------------------------------------------------------
 
 @router.post("/", response_class=EventSourceResponse)
 async def query_chat(
@@ -156,7 +148,7 @@ async def delete_chat_history(chat_id: str, current_user: AuthenticatedUser):
     file_uid = history.get("user_id")
     if file_uid and file_uid != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to delete this chat history")
-    deleted = await chat_history.delete_history(chat_id)
+    await chat_history.delete_history(chat_id)
     return {"status": "deleted", "chat_id": chat_id}
 
 

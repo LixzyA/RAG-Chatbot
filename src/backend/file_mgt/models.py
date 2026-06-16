@@ -1,7 +1,6 @@
-from fastapi import UploadFile
 from pydantic import BaseModel
 
 class UploadFileResponse(BaseModel):
-    status: str
+    status: int
     num_chunk: int
-    file_content: str
+    

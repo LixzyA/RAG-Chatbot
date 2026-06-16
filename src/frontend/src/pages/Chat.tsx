@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
+import { apiFetch } from "@/lib/api";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -40,7 +41,7 @@ function generateUUID(): string {
   return crypto.randomUUID();
 }
 
-const API_BASE = "http://localhost:8000";
+// centralized apiFetch wrapper is used for requests
 
 // ── Component ──────────────────────────────────────────────────────
 
@@ -70,15 +71,7 @@ export default function Chat() {
 
   const { token } = useAuth();
 
-  // Helper to build headers with auth
-  const authHeaders = useCallback(
-    (extra?: Record<string, string>): Record<string, string> => ({
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...extra,
-    }),
-    [token]
-  );
+  // auth token is read by apiFetch from localStorage
 
   // ── Load messages for a given chatId from backend ───────────────
 
@@ -86,9 +79,7 @@ export default function Chat() {
     async (cid: string) => {
       if (!token) return false;
       try {
-        const res = await fetch(`${API_BASE}/chat/history/${cid}`, {
-          headers: authHeaders(),
-        });
+        const res = await apiFetch(`/chat/history/${cid}`);
         if (!res.ok) {
           if (res.status === 404) {
             setMessages([]);
@@ -105,7 +96,7 @@ export default function Chat() {
         return false;
       }
     },
-    [token, authHeaders]
+    [token]
   );
 
   // ── Fetch chat list (all user's histories) ──────────────────────
@@ -113,9 +104,7 @@ export default function Chat() {
   const fetchChatList = useCallback(async () => {
     if (!token) return [];
     try {
-      const res = await fetch(`${API_BASE}/chat/histories`, {
-        headers: authHeaders(),
-      });
+      const res = await apiFetch("/chat/histories");
       if (res.ok) {
         return (await res.json()) as ChatSummary[];
       }
@@ -124,7 +113,7 @@ export default function Chat() {
       console.error("fetchChatList:", err);
     }
     return [];
-  }, [token, authHeaders]);
+  }, [token]);
 
   // ── On mount: load chat list, then open most recent chat ────────
 
@@ -206,9 +195,9 @@ export default function Chat() {
         const controller = new AbortController();
         abortRef.current = controller;
 
-        const res = await fetch(`${API_BASE}/chat/v2`, {
+        const res = await apiFetch("/chat/v2", {
           method: "POST",
-          headers: authHeaders(),
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ prompt: trimmed, top_k: 10, chat_id: chatId }),
           signal: controller.signal,
         });
@@ -279,7 +268,7 @@ export default function Chat() {
         });
       }
     },
-    [input, streaming, chatId, authHeaders, fetchChatList]
+    [input, streaming, chatId, fetchChatList]
   );
 
   // ── New chat handler ─────────────────────────────────────────────

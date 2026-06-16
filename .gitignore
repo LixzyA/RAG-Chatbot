@@ -250,3 +250,6 @@ chroma/
 *.jsonl
 report.md
 .chroma
+.bm25_cache
+.claude
+.langchain_chroma

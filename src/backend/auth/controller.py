@@ -3,7 +3,6 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from entity.base import get_session
-from entity.user import User
 from . import service
 from .models import RegisterRequest, LoginRequest, TokenResponse, UserResponse
 from .dependencies import AuthenticatedUser

@@ -1,13 +1,12 @@
 import { useState, useRef, useCallback } from "react";
+import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 
 interface UploadResponse {
-  status: string;
+  status: number;
   num_chunk: number;
-  file_content: string;
 }
 
-const CONTENT_PREVIEW_LENGTH = 400;
 
 export default function Files() {
   const [file, setFile] = useState<File | null>(null);
@@ -52,7 +51,7 @@ export default function Files() {
       const formData = new FormData();
       formData.append("file", file);
 
-      const res = await fetch("http://localhost:8000/files/upload", {
+      const res = await apiFetch("/files/upload", {
         method: "POST",
         body: formData,
       });
@@ -258,29 +257,6 @@ export default function Files() {
                   {response.num_chunk}
                 </p>
               </div>
-            </div>
-
-            {/* Content preview */}
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center justify-between">
-                <p className="text-muted-foreground text-xs font-medium uppercase tracking-wider">
-                  Content Preview
-                </p>
-                {response.file_content.length > CONTENT_PREVIEW_LENGTH && (
-                  <span className="text-muted-foreground text-xs">
-                    Showing {CONTENT_PREVIEW_LENGTH} / {response.file_content.length.toLocaleString()} chars
-                  </span>
-                )}
-              </div>
-              <pre
-                id="content-preview"
-                className="max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted/50 p-4 font-mono text-xs leading-relaxed text-foreground/80"
-              >
-                {response.file_content.slice(0, CONTENT_PREVIEW_LENGTH)}
-                {response.file_content.length > CONTENT_PREVIEW_LENGTH && (
-                  <span className="text-muted-foreground">…</span>
-                )}
-              </pre>
             </div>
           </div>
         )}
