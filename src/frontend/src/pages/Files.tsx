@@ -51,7 +51,7 @@ export default function Files() {
       const formData = new FormData();
       formData.append("file", file);
 
-      const res = await apiFetch("/files/upload", {
+      const res = await apiFetch("/ingest/", {
         method: "POST",
         body: formData,
       });

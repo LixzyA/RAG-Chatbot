@@ -195,7 +195,7 @@ export default function Chat() {
         const controller = new AbortController();
         abortRef.current = controller;
 
-        const res = await apiFetch("/chat/v2", {
+        const res = await apiFetch("/chat/", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ prompt: trimmed, top_k: 10, chat_id: chatId }),

@@ -1,0 +1,1 @@
+"""Orchestration — wires pipeline, retrieval, and generation into cohesive flows."""

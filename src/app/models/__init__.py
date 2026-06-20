@@ -1,0 +1,1 @@
+"""Pydantic models and schemas shared across the application."""

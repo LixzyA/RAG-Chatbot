@@ -1,0 +1,1 @@
+"""Generation logic: LLM client, prompt builder, response parser."""
