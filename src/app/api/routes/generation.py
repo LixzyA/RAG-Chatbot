@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import logging
@@ -6,7 +5,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.sse import EventSourceResponse
+from fastapi.sse import EventSourceResponse, format_sse_event
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import (
@@ -19,10 +18,12 @@ from app.core.orchestration.rag_chain import RAGChain, RAGTraceBuilder
 from app.entity.rag_traces import RAG_traces
 from app.models.requests import ChatQueryRequest
 from app.services import chat_history_service
+from app.utils.exceptions import AppException
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
 
 async def record_rag_trace(
     db: AsyncSession,
@@ -59,7 +60,9 @@ async def record_rag_trace(
         )
         db.add(trace)
         await db.commit()
-        logger.debug("Recorded rag_traces row for query: %s", builder.original_query[:80])
+        logger.debug(
+            "Recorded rag_traces row for query: %s", builder.original_query[:80]
+        )
     except Exception as exc:  # noqa: BLE001
         logger.exception("Failed to persist rag_traces row (non-fatal): %s", exc)
         try:
@@ -86,8 +89,19 @@ async def chat(
     # Resolve the int FK for chat_sessions (string UUID -> int PK).
     internal_session_id: int | None = None
     if query_req.chat_id and user_id is not None:
-        await chat_history_service.create_or_get_history(db, query_req.chat_id, user_id=user_id)
+        await chat_history_service.create_or_get_history(
+            db, query_req.chat_id, user_id=user_id
+        )
         internal_session_id = await chat_history_service.get_internal_session_id(
+            db, query_req.chat_id
+        )
+
+    # Fetch the previous user turn BEFORE saving the current message, so that
+    # "last user message" really means the prior turn. The chain uses this as
+    # conversational grounding only — it never influences retrieval.
+    previous_query: str | None = None
+    if query_req.chat_id and user_id is not None:
+        previous_query = await chat_history_service.get_last_user_message(
             db, query_req.chat_id
         )
 
@@ -104,29 +118,47 @@ async def chat(
     builder = RAGTraceBuilder()
 
     async def event_stream():
-        async for chunk in chain.run(
-            query_req.prompt, top_k=query_req.top_k, builder=builder
-        ):
-            yield chunk
-
-        yield "[DONE]"
-
-        if builder.original_query:
-            await record_rag_trace(
-                db,
-                builder,
-                session_id=internal_session_id,
-                user_id=user_id,
+        try:
+            async for chunk in chain.run(
+                query_req.prompt,
+                top_k=query_req.top_k,
+                builder=builder,
+                previous_query=previous_query,
+            ):
+                yield format_sse_event(data_str=chunk)
+        except AppException as exc:
+            logger.warning(
+                "SSE: RAG chain interrupted by %s: %s",
+                exc.__class__.__name__,
+                exc.message,
             )
+            yield format_sse_event(data_str=f"[ERROR] {exc.message}")
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("SSE: unexpected failure in chain.run")
+            yield format_sse_event(data_str=f"[ERROR] Unexpected error: {exc}")
+        finally:
+            yield format_sse_event(data_str="[DONE]")
 
-        # Save assistant message
-        if query_req.chat_id and user_id is not None and builder.llm_response:
-            await chat_history_service.add_message(
-                db,
-                query_req.chat_id,
-                {"id": assistant_msg_id, "role": "assistant", "content": builder.llm_response},
-                user_id=user_id,
-            )
+            if builder.original_query:
+                await record_rag_trace(
+                    db,
+                    builder,
+                    session_id=internal_session_id,
+                    user_id=user_id,
+                )
+
+            # Save assistant message
+            if query_req.chat_id and user_id is not None and builder.llm_response:
+                await chat_history_service.add_message(
+                    db,
+                    query_req.chat_id,
+                    {
+                        "id": assistant_msg_id,
+                        "role": "assistant",
+                        "content": builder.llm_response,
+                    },
+                    user_id=user_id,
+                )
 
     return EventSourceResponse(event_stream())
 
@@ -134,6 +166,7 @@ async def chat(
 # ------------------------------------------------------------------
 # History management (authenticated)
 # ------------------------------------------------------------------
+
 
 @router.get("/histories")
 async def list_histories(

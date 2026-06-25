@@ -2,6 +2,7 @@
 
 Source: scattered SSE / chunk parsing logic in backend/chat/service.py
 """
+
 from __future__ import annotations
 
 import logging

@@ -17,7 +17,7 @@ _reranker: CrossEncoderReranker | None = None
 
 def get_reranker() -> CrossEncoderReranker:
     """Return the global :class:`CrossEncoderReranker` singleton."""
-    global _reranker  
+    global _reranker
     if _reranker is None:
         _reranker = CrossEncoderReranker()
         logger.info("Reranker singleton created")
@@ -34,7 +34,7 @@ def get_vector_store(
     If you need a different collection or path, pass them on the first call.
     Subsequent calls ignore these arguments and return the cached instance.
     """
-    global _vector_store  
+    global _vector_store
     if _vector_store is None:
         kwargs: dict = {}
         if collection_name:
@@ -53,7 +53,7 @@ def get_vector_store(
 
 def reset_store() -> None:
     """Teardown — useful for tests or graceful shutdown."""
-    global _vector_store, _reranker  
+    global _vector_store, _reranker
     if _vector_store:
         _vector_store.close()
     if _reranker:

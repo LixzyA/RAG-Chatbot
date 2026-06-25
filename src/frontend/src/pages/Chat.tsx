@@ -198,7 +198,7 @@ export default function Chat() {
         const res = await apiFetch("/chat/", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt: trimmed, top_k: 10, chat_id: chatId }),
+          body: JSON.stringify({ prompt: trimmed, top_k: 20, chat_id: chatId }),
           signal: controller.signal,
         });
 

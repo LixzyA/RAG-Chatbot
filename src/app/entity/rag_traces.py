@@ -14,6 +14,7 @@ The route layer receives a string UUID (``session_uuid``) from the
 client. ``chat_history_service.get_internal_session_id(db, chat_id_uuid)``
 translates it to the int FK this table needs.
 """
+
 from sqlalchemy import (
     JSON,
     DateTime,
@@ -34,36 +35,40 @@ class RAG_traces(Base):
     __tablename__ = "rag_traces"
 
     # Primary Key
-    id: Mapped[int] = mapped_column(
-        Integer, primary_key=True, autoincrement=True
-    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
     # --- Query Details ---
     original_query: Mapped[str] = mapped_column(
         Text, nullable=False, index=True, comment="The original user query"
     )
     transformation_technique: Mapped[str | None] = mapped_column(
-        String(100), nullable=True,
+        String(100),
+        nullable=True,
         comment="Technique used (e.g., 'hyde', 'rewrite', 'decompose', 'passthrough')",
     )
     transformed_query: Mapped[str | None] = mapped_column(
-        Text, nullable=True, comment="The query after transformation (joined with ' || ' if multiple)"
+        Text,
+        nullable=True,
+        comment="The query after transformation (joined with ' || ' if multiple)",
     )
 
     # --- Retrieval & Reranking Details ---
     # JSON stores lists of {content, metadata, score?} dicts at each stage.
     retrieved_chunks: Mapped[list[dict] | None] = mapped_column(
-        JSON, nullable=True,
+        JSON,
+        nullable=True,
         comment="Initial chunks from hybrid search (BM25 + vector), BEFORE reranking",
     )
     reranked_chunks: Mapped[list[dict] | None] = mapped_column(
-        JSON, nullable=True,
+        JSON,
+        nullable=True,
         comment="Chunks after the cross-encoder reranker (with score field)",
     )
 
     # --- LLM Generation Details ---
     context_passed_to_llm: Mapped[list[dict] | None] = mapped_column(
-        JSON, nullable=True,
+        JSON,
+        nullable=True,
         comment="Dedup'd final context chunks used to build the LLM prompt",
     )
     llm_response: Mapped[str] = mapped_column(
@@ -90,11 +95,13 @@ class RAG_traces(Base):
 
     # Models used for this specific execution
     llm_model_name: Mapped[str | None] = mapped_column(
-        String(100), nullable=True,
+        String(100),
+        nullable=True,
         comment="LLM used for generation (e.g., 'meta-llama/Llama-3.1-8B-Instruct')",
     )
     embedding_model_name: Mapped[str | None] = mapped_column(
-        String(100), nullable=True,
+        String(100),
+        nullable=True,
         comment="Embedding model used for vector search",
     )
 
@@ -109,21 +116,33 @@ class RAG_traces(Base):
         Float, nullable=True, comment="Time taken for hybrid retrieval in milliseconds"
     )
     rerank_latency_ms: Mapped[float | None] = mapped_column(
-        Float, nullable=True, comment="Time taken for the reranker stage in milliseconds"
+        Float,
+        nullable=True,
+        comment="Time taken for the reranker stage in milliseconds",
     )
     llm_latency_ms: Mapped[float | None] = mapped_column(
-        Float, nullable=True, comment="Time taken for LLM streaming generation in milliseconds"
+        Float,
+        nullable=True,
+        comment="Time taken for LLM streaming generation in milliseconds",
     )
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), comment="Timestamp when the log was created"
+        DateTime,
+        server_default=func.now(),
+        comment="Timestamp when the log was created",
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), onupdate=func.now(),
+        DateTime,
+        server_default=func.now(),
+        onupdate=func.now(),
         comment="Timestamp when the log was last updated",
     )
 
     def __repr__(self) -> str:
-        preview = (self.original_query[:40] + "...") if len(self.original_query) > 40 else self.original_query
+        preview = (
+            (self.original_query[:40] + "...")
+            if len(self.original_query) > 40
+            else self.original_query
+        )
         return f"<RAG_traces(id={self.id}, query='{preview}', technique='{self.transformation_technique}')>"

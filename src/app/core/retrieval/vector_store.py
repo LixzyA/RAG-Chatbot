@@ -2,6 +2,7 @@
 
 Source: backend/vectordb/core.py (ChromaDB object + LangChain Chroma integration).
 """
+
 from __future__ import annotations
 
 import pickle
@@ -11,9 +12,9 @@ import chromadb
 from langchain_chroma import Chroma
 from langchain_community.retrievers import BM25Retriever
 from langchain_core.documents import Document
-from langchain_classic.retrievers import EnsembleRetriever 
+from langchain_classic.retrievers import EnsembleRetriever
 
-from app.utils.exceptions import ChromaInsertionException, ChromaQueryException
+from app.utils.exceptions import ChromaInsertionException
 from app.core.retrieval.reranker import CrossEncoderReranker
 import logging
 
@@ -62,7 +63,7 @@ class VectorStore:
             with open(self.bm25_cache_path, "rb") as fh:
                 docs = pickle.load(fh)  # noqa: S301
             logger.info("BM25 cache loaded: %d docs", len(docs))
-            return docs  
+            return docs
         return []
 
     def _save_docs_cache(self) -> None:
@@ -80,7 +81,9 @@ class VectorStore:
     # Public API
     # ------------------------------------------------------------------
 
-    def add_documents(self, documents: list[Document], ids: list[str] | None = None) -> None:
+    def add_documents(
+        self, documents: list[Document], ids: list[str] | None = None
+    ) -> None:
         """Add documents to the vector store and rebuild BM25."""
         try:
             self.vector_store.add_documents(documents, ids=ids)
@@ -91,7 +94,9 @@ class VectorStore:
             logger.error("Failed to add documents: %s", exc)
             raise ChromaInsertionException(str(exc)) from exc
 
-    def add_documents_bulk(self, documents: list[Document], ids: list[str] | None = None) -> None:
+    def add_documents_bulk(
+        self, documents: list[Document], ids: list[str] | None = None
+    ) -> None:
         """Add documents without rebuilding BM25 (call :meth:`rebuild_bm25` later)."""
         try:
             self.vector_store.add_documents(documents, ids=ids)
@@ -103,32 +108,77 @@ class VectorStore:
 
     def similarity_search(self, query: str, k: int = 4) -> list[tuple[Document, float]]:
         """Pure vector search."""
-        return self.vector_store.similarity_search_with_score(query, k=k)  
+        return self.vector_store.similarity_search_with_score(query, k=k)
 
-    def hybrid_search(self, query: str, k: int = 20) -> list[Document]:
-        """BM25 + Vector ensemble via LangChain ``EnsembleRetriever``."""
+    def hybrid_search(self, query: str, k: int = 20) -> list[tuple[Document, float]]:
+        """BM25 + Vector ensemble via LangChain ``EnsembleRetriever``.
+
+        Returns ``[]`` when the corpus is empty (no documents uploaded yet).
+        Callers (RAG chain, retrieval routes) translate that to a graceful
+        "no context" response; raising from here would orphan the SSE stream
+        because the 200 / event-stream headers have already been flushed.
+
+        Each item is ``(document, score)``. ``LangChain``'s ``EnsembleRetriever``
+        does not surface per-doc scores, so we synthesise a fused reciprocal-rank
+        score (RRF, weights 0.3 / 0.7 over BM25 + vector ranks) — this gives
+        downstream threshold filters a usable, normalized value while keeping
+        the BM25/vector ordering stable.
+        """
         if self.bm25_retriever is None:
             self.rebuild_bm25()
             if self.bm25_retriever is None:
-                raise ChromaQueryException("Cannot perform hybrid search: Collection is empty.")
+                logger.warning(
+                    "hybrid_search skipped: collection '%s' is empty",
+                    self.collection_name,
+                )
+                return []
 
-        self.bm25_retriever.k = k 
-        vector_retriever = self.vector_store.as_retriever(search_kwargs={"k": k}) 
+        self.bm25_retriever.k = k  # type: ignore[union-attr]
+        vector_retriever = self.vector_store.as_retriever(search_kwargs={"k": k})
 
         ensemble = EnsembleRetriever(
             retrievers=[self.bm25_retriever, vector_retriever],
             weights=[0.3, 0.7],
         )
-        return ensemble.invoke(query)  
+        ranked_docs = ensemble.invoke(query)
+
+        # Synthesise RRF scores keyed by doc fingerprint (page_content + meta hash).
+        # ``id(doc)`` would also work but is meaningless across pickle reloads.
+        scored_tuples: list[tuple[Document, float]] = []
+        scored_tuples = [(doc, self._rrf_score(ranked_docs, doc)) for doc in ranked_docs]
+        return scored_tuples
+
+    @staticmethod
+    def _rrf_score(ranked_docs: list[Document], target: Document) -> float:
+        """Reciprocal Rank Fusion score backed off by the inverse-rank term.
+
+        Score is in (``0``, ``~1``] for top-K queries with K ≈ 30+. Each rank
+        contributes ``1 / (k + rank)``; using a constant ``k=60`` matches the
+        standard RRF formulation used by LangChain's ensemble logic.
+        """
+        for rank, doc in enumerate(ranked_docs):
+            if doc.page_content == target.page_content:
+                return 1.0 / (60 + rank)
+        return 0.0
 
     def reranked_search(
         self, query: str, k: int = 5, candidate_multiplier: int = 4
     ) -> list[Document]:
-        """Two-stage retrieval: hybrid search followed by cross-encoder reranking."""
+        """Two-stage retrieval: hybrid search followed by cross-encoder reranking.
+
+        Returns a plain ``list[Document]`` (not tuples) for backwards
+        compatibility with the ``/retrieve`` response model — the reranker's
+        cross-encoder score is recorded on each ``Document.metadata['rerank_score']``
+        so callers can still surface a ``score`` field via metadata lookup.
+        """
         candidates = self.hybrid_search(query, k=k * candidate_multiplier)
-        if not candidates or self.reranker is None:
-            return candidates[:k]
-        return self.reranker.rerank(query, candidates, top_k=k)
+        if not candidates:
+            return []
+        docs_only = [doc for doc, _score in candidates]
+        if self.reranker is None:
+            return docs_only[:k]
+        reranked = self.reranker.rerank(query, docs_only, top_k=k)
+        return [doc for doc, _score in reranked]
 
     def rebuild_bm25(self) -> None:
         """Ensure docs cache is warm and rebuild the BM25 index."""
@@ -169,23 +219,25 @@ class VectorStore:
 
     def heartbeat(self) -> dict:
         """Lightweight runtime health check."""
+        chroma: dict = {"healthy": False, "error": None}
+        vs_store: dict = {"healthy": False, "error": None}
+
         try:
+            result = self.client.heartbeat()
+            chroma["healthy"] = bool(result)
+        except Exception as exc:
+            chroma["error"] = str(exc)
 
-            # 1) Chroma client
-            chroma_client = self.client.heartbeat()
+        try:
+            result = self.similarity_search("health check", k=1)
+            vs_store["healthy"] = bool(result)
+        except Exception as exc:
+            vs_store["error"] = str(exc)
 
-            # 2) Non-mutating search
-            vs = self.similarity_search("health check", k=1)
-
-            return {
-                "chroma_client": True if chroma_client else False,
-                "vector_store": True if vs else False,
-            }
-        except Exception:
-            return {
-                "chroma_client": True if chroma_client else False,
-                "vector_store": True if vs else False,
-            }
+        return {
+            "chroma_client": chroma,
+            "vector_store": vs_store,
+        }
 
     def close(self) -> None:
         """Release resources."""

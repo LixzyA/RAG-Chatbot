@@ -2,6 +2,7 @@
 
 Unified `Document` and related types used across pipeline, retrieval, and generation.
 """
+
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict

@@ -2,6 +2,7 @@
 
 Source: backend/vectordb/custom_embeddings.py (sentence-transformers adapter).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -21,6 +22,15 @@ class Embedder:
     def __init__(self, model_name: str | None = None) -> None:
         self.model_name = model_name or _DEFAULT_MODEL
         self._model: SentenceTransformer | None = None
+
+    @classmethod
+    def default_model_name(cls) -> str:
+        """Return the configured embedding model name without loading weights.
+
+        Cheap, safe to call from a debug/trace path — no SentenceTransformer
+        construction, no model download.
+        """
+        return _DEFAULT_MODEL
 
     # ------------------------------------------------------------------
     # Internal helpers

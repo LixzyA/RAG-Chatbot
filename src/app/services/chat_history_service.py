@@ -4,6 +4,7 @@ Each public function takes the ``AsyncSession`` as its first argument so
 callers (routes) can inject the session via ``Depends(get_db)``. This keeps
 DB access consistent across the app and lets tests swap in a fake session.
 """
+
 from __future__ import annotations
 
 import logging
@@ -103,6 +104,30 @@ async def get_internal_session_id(db: AsyncSession, chat_id: str) -> int | None:
         )
     )
     return result.scalar_one_or_none()
+
+
+async def get_last_user_message(db: AsyncSession, chat_id: str) -> str | None:
+    """Return the content of the most recent user message in the session.
+
+    Used by the chat route to surface conversational context (the previous
+    turn) into the LLM prompt for follow-up questions. Returns ``None`` when
+    the session has no prior user messages (e.g. the very first turn of a
+    new chat, or when ``chat_id`` ref doesn't exist).
+    """
+    query = (
+        select(ChatMessage)
+        .join(ChatSession, ChatMessage.session_id == ChatSession.id)
+        .where(
+            ChatSession.session_uuid == chat_id,
+            ChatSession.deleted_at.is_(None),
+            ChatMessage.role == "user",
+        )
+        .order_by(desc(ChatMessage.created_at))
+        .limit(1)
+    )
+    result = await db.execute(query)
+    msg = result.scalar_one_or_none()
+    return msg.content if msg else None
 
 
 async def create_or_get_history(

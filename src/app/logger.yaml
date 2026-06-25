@@ -1,3 +1,10 @@
+# Logging configuration — single source of truth for handlers, formatters,
+# and per-handler / per-logger levels. Resolved by utils/logger.setup_logging()
+# at app startup (called from main.py).
+#
+# Runtime path overrides (e.g. `log_dir`) live in src/app/config.py as
+# Settings fields and are injected into `handlers[*].filename` paths at the
+# moment setup_logging() loads this file — see utils/logger.py for the bridge.
 version: 1
 disable_existing_loggers: false
 

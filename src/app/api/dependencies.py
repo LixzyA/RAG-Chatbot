@@ -3,6 +3,7 @@
 These are injected into route handlers via ``Depends(...)`` so tests can
 override them with fakes.
 """
+
 from __future__ import annotations
 
 import logging
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 # ------------------------------------------------------------------
 # Database
 # ------------------------------------------------------------------
+
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """Yield an async database session."""
@@ -68,6 +70,7 @@ OptionalAuthenticatedUser = Annotated[User | None, Depends(_optional_user)]
 # ------------------------------------------------------------------
 # Vector store & reranker
 # ------------------------------------------------------------------
+
 
 def get_vector_db() -> VectorStore:
     """Return the singleton ``VectorStore``."""

@@ -28,6 +28,7 @@ def _set_sqlite_pragmas(dbapi_connection, connection_record):  # noqa: ANN001
 # Declarative base
 # ------------------------------------------------------------------
 
+
 class Base(DeclarativeBase):
     pass
 
@@ -35,6 +36,7 @@ class Base(DeclarativeBase):
 # ------------------------------------------------------------------
 # Initialisation
 # ------------------------------------------------------------------
+
 
 async def init_db() -> None:
     """Create all tables defined in metadata (safe to call on every startup)."""

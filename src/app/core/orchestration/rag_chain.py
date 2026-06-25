@@ -1,13 +1,4 @@
-"""RAG Chain — the main orchestrator.
-
-Wires together retrieval, reranking, and generation into a single callable chain.
-Also captures per-request trace data via ``RAGTraceBuilder`` so the route layer
-can persist one ``rag_traces`` row per query.
-
-Source: backend/chat/service.py (hybrid search + prompt building + LLM call flow).
-"""
-from __future__ import annotations
-
+import asyncio
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
@@ -15,11 +6,17 @@ from typing import Any
 
 from app.config import settings
 from app.core.generation.llm_client import get_llm_client
-from app.core.generation.prompt_builder import build_rag_prompt, get_system_prompt
+from app.core.generation.prompt_builder import (
+    build_rag_prompt,
+    get_generation_system_prompt,
+)
 from app.core.generation.response_parser import parse_sse_chunk
 from app.core.orchestration.query_processor import QueryProcessor
 from app.core.retrieval.vector_store import VectorStore
+from app.core.pipeline.embedder import Embedder
+from langchain_core.documents import Document
 from app.utils.exceptions import LLMException
+
 
 import logging
 
@@ -29,6 +26,7 @@ logger = logging.getLogger(__name__)
 # ------------------------------------------------------------------
 # Trace builder — populated by the chain, persisted by the route
 # ------------------------------------------------------------------
+
 
 @dataclass
 class RAGTraceBuilder:
@@ -97,6 +95,7 @@ class RAGTraceBuilder:
 # Chain
 # ------------------------------------------------------------------
 
+
 class RAGChain:
     """Orchestrates the full RAG pipeline.
 
@@ -116,8 +115,6 @@ class RAGChain:
     ) -> None:
         self.vector_store = vector_store
         self.use_reranker = use_reranker
-        # Allow callers (e.g. tests) to inject a pre-built reranker; fall
-        # back to whatever the vector store already has attached.
         self.reranker = reranker or getattr(vector_store, "reranker", None)
         self.query_processor = QueryProcessor()
         self.llm_client = get_llm_client()
@@ -131,22 +128,39 @@ class RAGChain:
         query: str,
         *,
         top_k: int = 10,
+        threshold: float | None = None,
         builder: RAGTraceBuilder | None = None,
-    ) -> tuple[list, list]:
+    ) -> tuple[list[Document], list[Document]]:
         """Retrieve, optionally rerank, and return ``(pre_rerank_docs, final_docs)``.
+
+        * ``pre_rerank_docs`` — deduped union of every hybrid-search hit across all
+          transformed queries; capped at ``top_k`` for the trace payload.
+        * ``final_docs`` — post-rerank (or pre-rerank fallback) hits whose score
+          passes ``threshold``; capped at ``top_k`` before being passed to the LLM.
+
+        ``threshold`` defaults to ``settings.rag_min_relevance`` (env:
+        ``RAG_MIN_RELEVANCE``). When the reranker is disabled or unavailable,
+        threshold filtering is skipped — there are no real relevance scores to
+        compare against.
+
+        Sync CPU work (Chroma/BM25 + cross-encoder) runs on a worker thread via
+        ``asyncio.to_thread`` so the FastAPI event loop stays responsive.
 
         If a ``builder`` is supplied it is populated with:
           * ``original_query``                — the raw query
           * ``transformation_technique``      — e.g. ``"rewrite"``, ``"hyde"``, ``"passthrough"``
           * ``transformed_query``             — the rewritten/decomposed/HyDE text(s)
           * ``retrieved_chunks``              — pre-rerank docs (BM25 + vector) as dicts
-          * ``reranked_chunks``               — docs after the cross-encoder reranker as dicts
+          * ``reranked_chunks``               — docs after threshold filtering as dicts
           * ``context_passed_to_llm``         — the dedup'd + sliced list that actually
                                                  reached the prompt, as dicts
           * ``retrieval_latency_ms``          — total wall-clock for hybrid retrieval
           * ``rerank_latency_ms``             — wall-clock for cross-encoder rerank stage
           * ``embedding_model_name``          — best-effort embedding model identifier
         """
+        if threshold is None:
+            threshold = settings.rag_min_relevance
+
         # 1. Transform the query (classification + expansion)
         ret_start = builder.start_retrieval() if builder else None
         transform_result = await self.query_processor.transform(query)
@@ -154,9 +168,21 @@ class RAGChain:
         if builder:
             builder.original_query = query
             builder.transformation_technique = transform_result["strategy"]
-            builder.transformed_query = " || ".join(transform_result["transformed_queries"])
+            builder.transformed_query = " || ".join(
+                transform_result["transformed_queries"]
+            )
 
         transformed_queries = transform_result["transformed_queries"]
+        # Cap fan-out — `decompose` can emit many sub-queries; re-running the
+        # cross-encoder on each is linear in N. Three covers the common case
+        # without blowing the latency budget.
+        if len(transformed_queries) > 3:
+            logger.info(
+                "Capping transformed_queries: %d -> 3",
+                len(transformed_queries),
+            )
+            transformed_queries = transformed_queries[:3]
+
         logger.info(
             "Query transform: type=%s strategy=%s confidence=%.2f",
             transform_result["query_type"],
@@ -164,70 +190,79 @@ class RAGChain:
             transform_result["confidence"],
         )
 
-        # Try to surface the embedding model name (best-effort; doesn't load weights).
+        # Embedding model name: cached class-level constant — no model load.
         if builder and builder.embedding_model_name is None:
-            try:
-                from app.core.pipeline.embedder import Embedder  # local to avoid cycles
-                builder.embedding_model_name = Embedder().model_name
-            except Exception:  # noqa: BLE001
-                pass
+            builder.embedding_model_name = Embedder.default_model_name()
 
-        def _doc_to_dict(doc) -> dict[str, Any]:
+        def _doc_to_dict(doc: Document) -> dict[str, Any]:
             return {
                 "content": doc.page_content,
                 "metadata": dict(doc.metadata or {}),
             }
 
-        # 2. For each transformed query, run hybrid search (pre-rerank) and rerank (post-rerank)
-        all_pre_rerank: list = []
-        all_final: list = []
+        # 2. For each transformed query, run hybrid search (pre-rerank) and rerank (post-rerank).
+        # Hybrid candidates are (doc, score) tuples; reranker output is also (doc, score).
+        all_pre_rerank: list[Document] = []
+        all_reranked: list[Document] = []
         seen_pre: set[str] = set()
-        seen_final: set[str] = set()
+        seen_reranked: set[str] = set()
         candidate_multiplier = settings.hybrid_candidate_multiplier
+        # `False` when reranker is off / unavailable — skip threshold filtering
+        # since the scores in that path are not real relevance values.
+        reranker_active = bool(self.use_reranker and self.reranker)
 
         for t_query in transformed_queries:
-            candidates = self.vector_store.hybrid_search(t_query, k=top_k * candidate_multiplier)
+            candidates = await asyncio.to_thread(
+                self.vector_store.hybrid_search,
+                t_query,
+                top_k * candidate_multiplier,
+            )
 
             # Track pre-rerank (dedup across transformed queries so a chunk
             # that appears in multiple rewrites is logged only once).
-            for doc in candidates:
+            for doc, _score in candidates:
                 if doc.page_content not in seen_pre:
                     seen_pre.add(doc.page_content)
                     all_pre_rerank.append(doc)
 
-            if self.use_reranker:
+            if reranker_active:
                 rerank_start = builder.start_rerank() if builder else None
-                if self.reranker:
-                    reranked = self.reranker.rerank(t_query, candidates, top_k=top_k)
-                else:
-                    reranked = candidates[:top_k]
+                # Reranker takes plain Documents — strip the tuples first.
+                rerank_input: list[Document] = [doc for doc, _s in candidates]
+                reranked_pairs: list[tuple[Document, float]] = await asyncio.to_thread(
+                    self.reranker.rerank,
+                    t_query,
+                    rerank_input,
+                    top_k,
+                )
                 if builder is not None and rerank_start is not None:
                     builder.stop_rerank(rerank_start)
-                final_iter = reranked
+                iter_pairs: list[tuple[Document, float]] = reranked_pairs
             else:
-                final_iter = candidates[:top_k]
+                # No real relevance signal — trust ordering, threshold disabled.
+                iter_pairs = [(doc, 1.0) for doc, _s in candidates[:top_k]]
 
-            for doc in final_iter:
-                if doc.page_content not in seen_final:
-                    seen_final.add(doc.page_content)
-                    all_final.append(doc)
+            for doc, score in iter_pairs:
+                if reranker_active and score < threshold:
+                    continue
+                if doc.page_content in seen_reranked:
+                    continue
+                seen_reranked.add(doc.page_content)
+                all_reranked.append(doc)
 
-        # Cap to requested top_k for both lists.
-        pre_rerank = all_pre_rerank[:top_k]
-        final = all_final[:top_k]
+        # Both lists respect top_k — pre_rerank for downstream trace size, final
+        # for LLM context size.
+        pre_rerank_capped = all_pre_rerank[:top_k]
+        final = all_reranked[:top_k]
 
         if builder is not None:
-            builder.retrieved_chunks = [_doc_to_dict(d) for d in pre_rerank]
+            builder.retrieved_chunks = [_doc_to_dict(d) for d in pre_rerank_capped]
             builder.reranked_chunks = [_doc_to_dict(d) for d in final]
             builder.context_passed_to_llm = [_doc_to_dict(d) for d in final]
             if ret_start is not None:
                 builder.stop_retrieval(ret_start)
 
-        return pre_rerank, final
-
-    # ------------------------------------------------------------------
-    # Generation
-    # ------------------------------------------------------------------
+        return pre_rerank_capped, final
 
     def _build_context(self, documents: list) -> str:
         return "\n\n".join(doc.page_content for doc in documents if doc.page_content)
@@ -240,16 +275,22 @@ class RAGChain:
         model: str | None = None,
         system_prompt: str | None = None,
         builder: RAGTraceBuilder | None = None,
+        previous_query: str | None = None,
     ) -> AsyncIterable[str]:
         """Yield text chunks from the LLM.
 
         When a ``builder`` is supplied, ``llm_model_name`` is set up front and
         ``llm_latency_ms`` is filled in at the end. ``llm_response`` is
         accumulated chunk-by-chunk so the caller can use it for persistence.
+
+        ``previous_query`` is purely an LLM-context signal: it is injected into
+        the user-turn prompt so the model can ground follow-up turns, but it
+        does NOT influence retrieval (retrieval uses the current ``query``
+        only — see :meth:`run`).
         """
-        model = model or settings.generalist_model
-        system = system_prompt or get_system_prompt("generalist")
-        full_prompt = build_rag_prompt(query, context)
+        model = model or settings.generation_model
+        system = system_prompt or get_generation_system_prompt()
+        full_prompt = build_rag_prompt(query, context, previous_query=previous_query)
 
         if builder is not None:
             builder.llm_model_name = model
@@ -285,14 +326,28 @@ class RAGChain:
         query: str,
         *,
         top_k: int = 10,
+        threshold: float | None = None,
         builder: RAGTraceBuilder | None = None,
+        previous_query: str | None = None,
     ) -> AsyncIterable[str]:
         """End-to-end RAG pipeline: retrieve → prompt → stream.
 
         ``builder``, if provided, is populated in-place with everything the
-        route layer needs to persist a ``rag_traces`` row.
+        route layer needs to persist a ``rag_traces`` row. ``threshold`` falls
+        back to ``settings.rag_min_relevance`` when not supplied.
+
+        ``previous_query`` is the user's immediately-prior turn (sourced by
+        the route from chat history). It is forwarded into the user-turn
+        prompt only — it does NOT influence retrieval, classification, or
+        query rewriting, by design. Pass ``None`` for first-turn / anonymous
+        requests and the prompt builder will simply omit the history block.
         """
-        docs_pre, docs_final = await self.retrieve(query, top_k=top_k, builder=builder)
+        if threshold is None:
+            threshold = settings.rag_min_relevance
+
+        docs_pre, docs_final = await self.retrieve(
+            query, top_k=top_k, threshold=threshold, builder=builder
+        )
         logger.info(
             "Retrieved %d candidate docs, %d final for query: %s",
             len(docs_pre),
@@ -301,12 +356,34 @@ class RAGChain:
         )
 
         if not docs_final:
-            msg = "I could not find any relevant information in the provided documents."
+            # ``.count()`` is a sync Chroma call — hand it to a worker thread
+            # so the event loop stays responsive. ``self.vector_store.client``
+            # is unconditionally built in ``VectorStore.__init__``, so the
+            # null-check is dead and has been removed.
+            collection = self.vector_store.client.get_or_create_collection(
+                self.vector_store.collection_name
+            )
+            retrieval_total = await asyncio.to_thread(collection.count)
+            if retrieval_total == 0:
+                msg = (
+                    "Your knowledge base is empty — please upload some documents "
+                    "first, then ask your question again."
+                )
+            else:
+                msg = (
+                    "I could not find any relevant information in the provided "
+                    "documents for that question."
+                )
             if builder is not None:
                 builder.llm_response = msg
             yield msg
             return
 
         context = self._build_context(docs_final)
-        async for chunk in self.generate_stream(query, context, builder=builder):
+        async for chunk in self.generate_stream(
+            query,
+            context,
+            builder=builder,
+            previous_query=previous_query,
+        ):
             yield chunk

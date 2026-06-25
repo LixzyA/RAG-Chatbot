@@ -2,6 +2,7 @@
 
 Renamed from backend/entity/chat_history.py → ChatSession / chat_sessions.
 """
+
 from __future__ import annotations
 
 from sqlalchemy import ForeignKey, Index, Integer, Text, desc, text
@@ -9,6 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
 from .chat_message import ChatMessage
+
 
 class ChatSession(Base):
     __tablename__ = "chat_sessions"

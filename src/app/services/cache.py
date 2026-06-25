@@ -2,6 +2,7 @@
 
 Simple in-memory TTL cache — drop-in placeholder for Redis / Valkey.
 """
+
 from __future__ import annotations
 
 import logging
@@ -60,6 +61,7 @@ class TTLCache:
     @property
     def size(self) -> int:
         return len(self._data)
+
 
 # Global default instance — import this for a quick shared cache.
 default_cache = TTLCache()

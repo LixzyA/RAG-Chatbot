@@ -4,155 +4,136 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development Commands
 
-### Backend (Python/FastAPI)
+### Backend (Python/FastAPI) — root: `src/app/`
 
 ```bash
-# Install dependencies (uses uv)
-cd src/backend && uv sync
-
-# Run the dev server
-cd src/backend && fastapi dev main.py
-# or: uvicorn main:app --reload --port 8000
-# or: uv run fastapi
-
-# RAG evaluation pipeline
-cd src/backend && python evaluate_rag.py
-
-# Batch-ingest JSONL corpus files into ChromaDB
-cd src/backend && python scripts/ingest_corpus.py <corpus_dir>
-
-# Pre-download embedding/reranker models
-cd src/backend && python scripts/download_model.py
+cd src/app
+uv sync                          # install (venv lives at src/app/.venv)
+fastapi dev main.py              # or: uv run fastapi dev
+uvicorn main:app --reload --port 8000
 ```
 
-### Frontend (React/Vite/TypeScript)
+Requires **Python == 3.11.15** (pinned in `src/app/pyproject.toml`). PyTorch index is declared in the same file.
+
+### Frontend (React/Vite/TypeScript) — root: `src/frontend/`
 
 ```bash
-cd src/frontend && npm install
-cd src/frontend && npm run dev          # Start dev server (port 5173)
-cd src/frontend && npm run build        # TypeScript check + Vite build
-cd src/frontend && npm run lint         # ESLint
-cd src/frontend && npm run format       # Prettier
-cd src/frontend && npm run typecheck    # tsc --noEmit
-cd src/frontend && npm run preview      # Preview production build
+cd src/frontend
+npm install
+npm run dev          # port 5173
+npm run build        # tsc -b && vite build
+npm run lint         # ESLint
+npm run typecheck    # tsc --noEmit
+npm run format       # Prettier
 ```
+
+Node.js ≥ 18 (package.json pins Vite 7 / React 19 / TS 5.9).
 
 ### Environment
 
-- Backend requires Python == 3.11.15 with `uv` package manager
-- Frontend requires Node.js >= 18
-- LLM models are served via HuggingFace Inference API (configure HF_TOKEN in `.env`)
-- By default LLM calls use `AsyncInferenceClient()` which reads `HF_TOKEN` from environment
-- See `src/backend/pyproject.toml` for all Python dependencies
-- PyTorch uses CUDA 12.8 index defined in `pyproject.toml` under `[[tool.uv.index]]`
+Create `.env` at repo root (read by `src/app/config.py` via `PROJECT_ROOT/.env`). All LLM calls go through `huggingface_hub`'s `AsyncInferenceClient()`, which reads `HF_TOKEN`. See `.env.example` for the canonical key list. Reference documentation for all env vars is in `src/app/config.py` (one field per var, with `alias=` naming the env name).
 
 ## High-Level Architecture
 
-This is a **RAG (Retrieval-Augmented Generation) Chatbot** with a dual-model router system, hybrid search, and cross-encoder reranking.
+A two-model **RAG chatbot**: user query → optional query transformation → hybrid retrieval (BM25 + vector) → cross-encoder rerank → streamed back from a single generation LLM via SSE.
 
-### Backend Structure (`src/backend/`)
+- **`router_model`** (small, ~1B) handles all query-classification and query-transformation work in `core/orchestration/query_processor.py`: classify topic → rewrite / decompose / HyDE / passthrough.
+- **`generation_model`** (large) produces the final answer in `core/orchestration/rag_chain.py:generate_stream` from the top-k reranked chunks.
 
-```
-main.py                           # FastAPI app entry: lifespan (async startup), CORS, /health
-api.py                            # Router registration (mounts auth, chat, file_mgt controllers)
-exception.py                      # All custom HTTP exceptions (HTTPException subclasses)
-logger.py / logger.yaml           # Structured logging (JSON + console, rotating file handler)
+The previous specialist/generalist split has been collapsed into the single generation model. `core/generation/prompt_builder.py` exposes one prompt: `get_generation_system_prompt()`.
 
-auth/                             # JWT-based authentication
-  controller.py                   # POST /auth/register, /auth/login, GET /auth/me
-  service.py                      # Password hashing (argon2 via pwdlib), JWT create/decode
-  dependencies.py                 # FastAPI dependency injection: AuthenticatedUser, OptionalAuthenticatedUser
-  models.py                       # Pydantic request/response schemas
-
-chat/                             # Core RAG chat logic
-  controller.py                   # POST /chat/v2 (SSE streaming), history CRUD endpoints
-  service.py                      # Query routing, prompt building, streaming LLM calls
-  router.py                       # Llama-3.2-1B-Instruct query classifier (topic → specialist/generalist)
-  core.py                         # AsyncInferenceClient singleton init, healthcheck
-  history.py                      # Chat history persistence (SQLAlchemy/SQLite)
-  models.py                       # Pydantic schemas (ChatQueryRequest, ChatHistoryResponse, etc.)
-  prompt/                         # System prompt templates (.txt files)
-    specialist.txt                # Strict RAG prompt for serious/hard topics
-    generalist.txt                # Conversational RAG prompt for general topics
-
-file_mgt/                         # Document upload & ingestion
-  controller.py                   # POST /files/upload
-  service.py                      # PDF parsing (pdfminer), RecursiveCharacterTextSplitter chunking
-  models.py                       # UploadFileResponse schema
-
-vectordb/                         # Vector database & search
-  core.py                         # ChromaDB wrapper: embedding, hybrid search (BM25 + vector), reranked_search
-  custom_embeddings.py            # LangChain Embeddings adapter for sentence-transformers/all-MiniLM-L6-v2
-  reranker.py                     # FlagReranker (BAAI/bge-reranker-v2-m3) cross-encoder reranker
-
-entity/                           # SQLAlchemy ORM models
-  base.py                         # Engine, session factory, init_db (auto-creates tables)
-  user.py                         # User table (id, username, email, password_hash, ...)
-  chat_history.py                 # Chat sessions table (session_uuid, user_id, title, timestamps)
-  chat_message.py                 # Messages table (session_id, role, content, token_count)
-
-scripts/
-  download_model.py               # Pre-cache embedding + reranker models
-  ingest_corpus.py                # CLI tool to batch-ingest JSONL files into ChromaDB
-```
-
-### Frontend Structure (`src/frontend/`)
+### Backend layout (`src/app/`)
 
 ```
-src/App.tsx                       # BrowserRouter, AuthProvider, Navbar, Routes
-src/main.tsx                      # Entry point
-src/index.css                     # Tailwind CSS v4 imports + @theme base styles
-
-src/contexts/AuthContext.tsx       # Auth state (token, user), login/register/logout, localStorage persistence
-
-src/lib/
-  api.ts                          # apiFetch wrapper — prepends http://localhost:8000/, injects Bearer token
-  utils.ts                        # Tailwind class merge utility (cn())
-
-src/components/
-  Navbar.tsx                      # Top nav with auth-aware links
-  ProtectedRoute.tsx              # Route guard — redirects to /login if unauthenticated
-  theme-provider.tsx               # Light/dark theme toggle
-  ui/                             # shadcn/ui components (button, card, input, alert-dialog)
-
-src/pages/
-  Chat.tsx                        # Main chat interface — SSE streaming, history sidebar, markdown rendering
-  Files.tsx                       # Document upload interface
-  Home.tsx                        # Landing page
-  Login.tsx / Register.tsx        # Auth pages
+main.py                          # FastAPI app + lifespan (init singletons + DB, shutdown resets)
+api/
+  dependencies.py                 # DI providers (get_db, get_rag_chain_dep, auth guards)
+  routes/
+    auth.py                      # POST /auth/{register,login}, GET /auth/me
+    generation.py                # POST /chat/ (SSE) + /chat/histories CRUD + rag_traces persistence
+    health.py                    # GET /health
+    ingestion.py                 # POST /ingest
+    retrieval.py                 # POST /retrieve
+core/                            # framework-agnostic — NO FastAPI imports, reusable + testable
+  orchestration/
+    query_processor.py           # classify / rewrite / decompose / HyDE / passthrough
+    rag_chain.py                 # RAG pipeline + RAGTraceBuilder (per-request observability)
+  generation/                    # llm_client, prompt_builder, response_parser
+  retrieval/                     # vector_store (ChromaDB + EnsembleRetriever) + reranker
+  pipeline/                      # document_loader, chunker, text_splitter, embedder, ranker (RRF)
+entity/                          # SQLAlchemy ORM (Base, User, ChatSession, ChatMessage, RAG_traces)
+models/                          # Pydantic v2 request/response + Document models
+services/                        # thin: singletons (VectorStore, Reranker, RAGChain) + DB-aware fns
+                                 # all fns take AsyncSession via DI; chat_history_service, auth_service
+utils/                           # logger (setup_logging from main.py), exceptions, telemetry
 ```
 
-### Key Data Flows
+**Layer rule:** `core/` is framework-agnostic and never imports `api/`, `entity/`, or `models/`. `services/` owns the session-bound/singleton side. `api/routes/` is the only seam that ties them together (and is where `RAGTraceBuilder` → `RAG_traces` persistence happens — `api/routes/generation.py:record_rag_trace`).
 
-**Chat Flow:** User query → `/chat/v2` SSE endpoint → parallel context retrieval (hybrid search → reranker) + query classification (router model) → routed to Specialist or Generalist LLM → streamed response back via SSE → messages saved to SQLite.
+### Singletons
 
-**Upload Flow:** File upload → `/files/upload` → file type validation (.txt, .pdf) → text extraction (pdfminer for PDF) → RecursiveCharacterTextSplitter (tiktoken, chunk_size=1024, overlap=20%) → embedding (all-MiniLM-L6-v2) → ChromaDB storage → BM25 cache update.
+`VectorStore`, `Reranker`, and `RAGChain` are factored as lazy singletons in `services/`. They are materialised by `lifespan` in `main.py` (reranker is loaded in a background task so it doesn't block startup) and reset on shutdown.
 
-### Key Architecture Decisions
+### Frontend layout (`src/frontend/src/`)
 
-- **Dual-model router**: Llama-3.2-1B-Instruct classifies queries into serious topics (legal, medical, financial, technical, scientific, security) → routed to specialist (Llama-4-Scout-17B) vs generalist (Llama-3.1-8B). Classification uses JSON output with confidence threshold (0.7).
-- **Hybrid search**: Ensemble of BM25 (keyword, weight 0.3) + vector similarity (embedding, weight 0.7), followed by cross-encoder reranking (BAAI/bge-reranker-v2-m3).
-- **ChromaDB**: Local persistent vector database with SQLite backend. BM25 index rebuilt from a pickled document cache.
-- **SQLite for chat history**: Async SQLAlchemy with aiosqlite, WAL mode, soft-delete for chat sessions.
+```
+App.tsx + main.tsx               # BrowserRouter, AuthProvider, theme provider
+contexts/AuthContext.tsx         # token + user state, localStorage persistence
+lib/api.ts                       # apiFetch — prepends http://localhost:8000, injects Bearer token
+components/Navbar.tsx, ProtectedRoute.tsx, ui/ (shadcn)
+pages/Chat.tsx, Files.tsx, Home.tsx, Login.tsx, Register.tsx
+```
 
-### Environment Variables
+Tailwind CSS v4 (`@tailwindcss/vite`), React 19, shadcn/ui primitives.
 
-Referenced in source — create a `.env` file in `src/backend/`:
+## Key Data Flows
 
-| Variable | Default | Description |
-|---|---|---|
-| `HUGGINGFACEHUB_API_TOKEN` / `HF_TOKEN` | — | HuggingFace Inference API token |
-| `SPECIALIST_MODEL` | meta-llama/Llama-4-Scout-17B-16E-Instruct | Specialist LLM |
-| `GENERALIST_MODEL` | meta-llama/Llama-3.1-8B-Instruct | Generalist LLM |
-| `ROUTER_MODEL` | meta-llama/Llama-3.2-1B-Instruct | Router/classifier LLM |
-| `RERANKER_MODEL` | BAAI/bge-reranker-v2-m3 | Cross-encoder reranker |
-| `RERANKER_ENABLED` | true | Toggle reranker on/off |
-| `RERANKER_DEVICE` | cpu | Device for reranker ("cpu" or "cuda") |
-| `JWT_SECRET_KEY` | change-me-in-production... | JWT signing secret |
-| `JWT_EXPIRE_MINUTES` | 1440 | Token expiry (24h) |
-| `DATABASE_URL` | sqlite+aiosqlite:///data/app.db | SQLite connection string |
-| `DB_DIR` | src/backend/data/ | Database directory |
+**Chat (`POST /chat/`, SSE):**
+1. Route validates auth (optional), resolves `chat_id` → int FK via `chat_history_service.get_internal_session_id`, saves user message.
+2. `RAGChain.run(prompt, builder=RAGTraceBuilder())`:
+   - `QueryProcessor` classifies topic (or rewrites / HyDE-decomposes if `QUERY_TRANSFORM_ENABLED=true`).
+   - `VectorStore` runs hybrid (BM25 + cosine) ensemble → returns N×`top_k` candidates, then `Reranker` (BAAI/bge-reranker-v2-m3, lazy-loaded, optional via `RERANKER_ENABLED`) cuts to `top_k`.
+   - `prompt_builder` injects chunks as context into the single generation system prompt.
+   - `AsyncInferenceClient.chat.completions.create(stream=True)` yields tokens; route passes chunks through SSE.
+3. After `[DONE]`: route writes one `RAG_traces` row from the populated `RAGTraceBuilder` (latencies + per-stage snapshots), then saves the assistant message. Trace-write failures are logged + swallowed — they never break the response.
 
-### Evaluation
+**Ingestion (`POST /ingest`):** file → extension validation → text extraction (pdfminer.six for PDFs) → `RecursiveCharacterTextSplitter` (tiktoken, `chunk_size=1024`, 20% overlap) → embed (`sentence-transformers/all-MiniLM-L6-v2`) → ChromaDB.
 
-`evaluate_rag.py` runs a custom RAG evaluation pipeline: loads questions from `evaluation.jsonl`, retrieves context, generates answers, and scores them on groundedness, relevance, and standalone quality using Llama-4-Scout as a judge.
+**Auth:** JWT (HS256) issued by `auth/service.py`, validated by `api/dependencies.py:AuthenticatedUser` / `OptionalAuthenticatedUser`. Passwords hashed with argon2 via `pwdlib`.
+
+## Architectural decisions worth knowing
+
+- **Two models in the system, set via env-overridable fields in `config.py`:**
+  - `router_model` (default `meta-llama/Llama-3.2-1B-Instruct`, alias `ROUTER_MODEL`) — used by `QueryProcessor` for classify / rewrite / decompose / HyDE.
+  - `generation_model` (default `google/gemma-4-31B-it`, alias `GENERATION_MODEL`) — used by `generate_stream` for the final answer and by `llm_client.healthcheck`.
+- **Hybrid retrieval:** EnsembleRetriever weights BM25 0.3 / vector 0.7. `HYBRID_CANDIDATE_MULTIPLIER` (default 4) controls the pre-rerank fan-out.
+- **DB:** SQLite via `aiosqlite` (async). Schema created via `entity/base.py:init_db` on startup. Chat sessions use soft-delete + auto-title.
+- **History persistence:** Messages stored as JSON column on `ChatMessage`, keyed by string UUID `session_uuid` (clients see strings; FK to `chat_sessions.id` is the int PK).
+- **Observability:** Inline RAG trace persistence (`api/routes/generation.py:record_rag_trace`) — no new service module, by design. Anonymous queries (no `chat_id`, no user) still emit a `rag_traces` row with both FKs `NULL` (nullable + `ON DELETE SET NULL`).
+- **Embedding / reranker models:** Pre-downloaded on first use; reranker load is deferred to a `lifespan` background task so it never blocks server start.
+
+## Working in this codebase
+
+### CodeGraph is enabled
+
+A `.codegraph/` index exists at the repo root — reach for `codegraph_explore` (with `mcp__codegraph__codegraph_explore` if available) **before** reading files or grepping when you need to understand or locate code. ONE call returns the verbatim source of the relevant symbols grouped by file plus the call path between them — treat returned source as already Read.
+
+### CODE_REVIEW.md is the source of design truth
+
+`CODE_REVIEW.md` at the repo root records the refactor's bug-fix history, layer-boundary rationale, and **three remaining open items**:
+
+1. `SUGGESTION #4` — drop `src/app/py.typed` (PEP 561 marker) so type checkers honour inline annotations.
+2. `SUGGESTION #5` — replace `# type: ignore` comments in `core/retrieval/vector_store.py` and `core/retrieval/reranker.py` with thin typed wrappers / `.pyi` stubs.
+3. `SUGGESTION #8` — wire `tenacity` retry logic around the three LLM call sites (`core/generation/llm_client.py`, `core/orchestration/query_processor.py:_llm_call`, `core/orchestration/rag_chain.py:generate_stream`). `tenacity` is already installed.
+
+Before touching code that touches these areas, check CODE_REVIEW.md for the prior reasoning.
+
+### Practical reminders
+
+- `setup_logging()` is called once from `main.py` — don't call it elsewhere.
+- `core/` raises `utils/exceptions.py` framework-agnostic error types; only `api/routes/` translates them to `HTTPException`.
+- Entity models use the `Mapped[...]` / `mapped_column(...)` declarative style (SQLAlchemy 2).
+- Pydantic is v2 throughout (`ConfigDict`, `model_validator`, `model_dump`, `Field` with `alias=`).
+- Frontend ↔ backend auth is a Bearer token from `localStorage.auth_token`, sent by `lib/api.ts:apiFetch` (set `requireAuth: false` for `/auth/*` and `/health`).
+</content>
+</invoke>

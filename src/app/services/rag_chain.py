@@ -8,6 +8,7 @@ instance on every chat turn.
 Routes should obtain the chain through the FastAPI dependency
 ``get_rag_chain_dep`` (in ``app.api.dependencies``), which delegates here.
 """
+
 from __future__ import annotations
 
 import logging

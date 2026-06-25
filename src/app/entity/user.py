@@ -2,6 +2,7 @@
 
 Source: backend/entity/user.py
 """
+
 from __future__ import annotations
 
 from sqlalchemy import Integer, Text, text

@@ -2,12 +2,14 @@
 
 Source: backend/chat/core.py (AsyncInferenceClient singleton + healthcheck).
 """
+
 from __future__ import annotations
 
 import logging
 from huggingface_hub import AsyncInferenceClient
 
 from app.config import settings
+
 logger = logging.getLogger(__name__)
 
 # Global singleton — created on first import.
@@ -23,18 +25,23 @@ def get_llm_client() -> AsyncInferenceClient:
     return _llm_client
 
 
-async def healthcheck() -> bool:
-    """Lightweight probe: issue a single-turn chat to the generalist model."""
+async def healthcheck() -> dict:
+    """Lightweight probe: issue a single-turn chat to the generation model."""
     client = get_llm_client()
+    result: dict = {"healthy": False, "error": None}
     try:
         response = await client.chat.completions.create(
-            model=settings.generalist_model,
-            messages=[{"role": "user", "content": "Hello"}],
+            model=settings.generation_model,
+            messages=[{"role": "user", "content": "healthcheck"}],
             temperature=0.1,
         )
-        return bool(response)
-    except Exception:
-        return False
+        if response:
+            result["healthy"] = True
+        else:
+            result["error"] = "Empty response from LLM"
+    except Exception as exc:
+        result["error"] = str(exc)
+    return result
 
 
 def reset_client() -> None:

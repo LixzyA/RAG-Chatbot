@@ -2,6 +2,7 @@
 
 Mirrors backend/entity/ but lives under app/ so the new tree is self-contained.
 """
+
 from app.entity.base import Base
 from app.entity.chat_message import ChatMessage
 from app.entity.chat_session import ChatSession

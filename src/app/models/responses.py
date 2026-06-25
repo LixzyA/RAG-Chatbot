@@ -2,6 +2,7 @@
 
 Covers both synchronous and streaming (SSE) response shapes.
 """
+
 from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict
 
@@ -19,6 +20,7 @@ class UserResponse(BaseModel):
     email: str
     created_at: datetime
 
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -28,6 +30,7 @@ class TokenResponse(BaseModel):
 # --------------------------------------------------------------------------
 # Chat
 # --------------------------------------------------------------------------
+
 
 class ChatMessage(BaseModel):
     id: str
@@ -55,14 +58,16 @@ class ChatSessionSummary(BaseModel):
 
 class ChatRouteInfo(BaseModel):
     """Internal routing metadata for logging / debugging."""
+
     topic: str
     confidence: float
-    model_used: str  # "specialist" or "generalist"
+    model_used: str  # "generation"
 
 
 # --------------------------------------------------------------------------
 # Ingestion
 # --------------------------------------------------------------------------
+
 
 class UploadFileResponse(BaseModel):
     status: int = Field(description="HTTP-like status code: 200 = success, etc.")
@@ -72,6 +77,7 @@ class UploadFileResponse(BaseModel):
 # --------------------------------------------------------------------------
 # Retrieval
 # --------------------------------------------------------------------------
+
 
 class RetrievedDocument(BaseModel):
     id: str
@@ -90,6 +96,7 @@ class RetrieveResponse(BaseModel):
 # --------------------------------------------------------------------------
 # Health
 # --------------------------------------------------------------------------
+
 
 class HealthResponse(BaseModel):
     status: str = "ok"

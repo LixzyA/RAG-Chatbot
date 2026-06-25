@@ -3,9 +3,11 @@
 Decides which model/prompt to use and optionally rewrites the user query
 for better retrieval (HyDE, multi-query, etc.).
 
-Source: backend/vectordb/query_transformer.py (classification + rewrite logic),
-        backend/chat/router.py (topic classifier that routes to specialist/generalist).
+Source: backend/vectordb/query_transformer.py (classification + rewrite logic).
+Uses the **router model** (small) for all LLM calls — classification,
+rewriting, decomposition, and HyDE generation.
 """
+
 from __future__ import annotations
 
 import json
@@ -32,7 +34,7 @@ Available query types:
 - "conversational": Small talk, opinions, or creative prompts (e.g., "tell me a joke").
 
 Example output:
-{"query_type": "factual", "confidence": 0.92}
+{{"query_type": "factual", "confidence": 0.92}}
 
 Query: {query}
 """
@@ -72,13 +74,15 @@ class QueryProcessor:
     """LLM-based query classification and transformation for improved retrieval."""
 
     def __init__(self, model: str | None = None) -> None:
-        self.model = model or settings.query_transform_model or settings.generalist_model
+        self.model = model or settings.router_model
         self._client = get_llm_client()
 
     # ------------------------------------------------------------------
     # LLM helper
     # ------------------------------------------------------------------
-    async def _llm_call(self, system_prompt: str, user_prompt: str, *, max_tokens: int = 256) -> str:
+    async def _llm_call(
+        self, system_prompt: str, user_prompt: str, *, max_tokens: int = 256
+    ) -> str:
         """Low-temperature LLM call returning raw text."""
         response = await self._client.chat.completions.create(
             model=self.model,
@@ -110,13 +114,16 @@ class QueryProcessor:
             pass
 
         # Fallback: extract JSON-like fragment
-        json_match = re.search(r'\{[^}]+\}', text)
+        json_match = re.search(r"\{[^}]+\}", text)
         if json_match:
             try:
                 result = json.loads(json_match.group())
                 qtype = str(result["query_type"]).lower().strip()
                 if qtype in VALID_QUERY_TYPES:
-                    return {"query_type": qtype, "confidence": float(result["confidence"])}
+                    return {
+                        "query_type": qtype,
+                        "confidence": float(result["confidence"]),
+                    }
             except (json.JSONDecodeError, KeyError, ValueError):
                 pass
 
@@ -132,7 +139,9 @@ class QueryProcessor:
             )
             return self._parse_classification(raw)
         except Exception as exc:
-            logger.warning("Query classification failed, falling back to 'simple': %s", exc)
+            logger.warning(
+                "Query classification failed, falling back to 'simple': %s", exc
+            )
             return {"query_type": "simple", "confidence": 0.0}
 
     # ------------------------------------------------------------------
@@ -147,7 +156,7 @@ class QueryProcessor:
                 user_prompt=prompt,
                 max_tokens=256,
             )
-            rewritten = raw.strip().strip('"\'')
+            rewritten = raw.strip().strip("\"'")
             if not rewritten:
                 return [query]
             return [rewritten]
@@ -180,7 +189,7 @@ class QueryProcessor:
         except (json.JSONDecodeError, ValueError):
             pass
 
-        array_match = re.search(r'\[.*\]', text, re.DOTALL)
+        array_match = re.search(r"\[.*\]", text, re.DOTALL)
         if array_match:
             try:
                 result = json.loads(array_match.group())

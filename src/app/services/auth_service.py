@@ -2,6 +2,7 @@
 
 Source: backend/auth/service.py
 """
+
 from __future__ import annotations
 
 import logging
@@ -39,7 +40,9 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 def create_access_token(user_id: int) -> str:
-    expires = datetime.now(timezone.utc) + timedelta(minutes=settings.jwt_expire_minutes)
+    expires = datetime.now(timezone.utc) + timedelta(
+        minutes=settings.jwt_expire_minutes
+    )
     payload = {
         "sub": str(user_id),
         "exp": expires,

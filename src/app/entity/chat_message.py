@@ -2,9 +2,19 @@
 
 Source: backend/entity/chat_message.py
 """
+
 from __future__ import annotations
 
-from sqlalchemy import CheckConstraint, DDL, ForeignKey, Index, Integer, Text, event, text
+from sqlalchemy import (
+    CheckConstraint,
+    DDL,
+    ForeignKey,
+    Index,
+    Integer,
+    Text,
+    event,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.entity.base import Base

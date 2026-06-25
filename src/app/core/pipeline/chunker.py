@@ -3,6 +3,7 @@
 Delegates the mechanical splitting to `core.pipeline.text_splitter`.
 Source: backend/file_mgt/service.py (chunking + metadata assignment).
 """
+
 from __future__ import annotations
 
 from langchain_core.documents import Document

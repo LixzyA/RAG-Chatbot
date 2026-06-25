@@ -50,7 +50,9 @@ def setup_logging() -> None:
             format="%(asctime)s [%(levelname)s] %(filename)s:%(lineno)d in %(funcName)s - %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
-        logging.warning("Logging config '%s' not found. Using basicConfig.", config_path)
+        logging.warning(
+            "Logging config '%s' not found. Using basicConfig.", config_path
+        )
         _logging_configured = True
         return
 
@@ -69,5 +71,3 @@ def setup_logging() -> None:
 
     logging.config.dictConfig(config)
     _logging_configured = True
-
-

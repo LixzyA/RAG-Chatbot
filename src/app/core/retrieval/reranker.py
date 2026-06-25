@@ -2,6 +2,7 @@
 
 Source: backend/vectordb/reranker.py (FlagReranker wrapper).
 """
+
 import gc
 import time
 import torch
@@ -14,7 +15,6 @@ from app.utils.exceptions import RerankerException
 import logging
 
 logger = logging.getLogger(__name__)
-
 
 
 class CrossEncoderReranker:
@@ -62,17 +62,24 @@ class CrossEncoderReranker:
             self._loaded = True
             logger.info("Reranker loaded.")
         except Exception as e:
-            logger.exception(f'Encountered unexpected error during loading: {e}')
+            logger.exception(f"Encountered unexpected error during loading: {e}")
 
     def rerank(
         self,
         query: str,
         documents: list[Document],
         top_k: int = 5,
-    ) -> list[Document]:
-        """Return the most relevant *top_k* documents ordered by cross-encoder score."""
+    ) -> list[tuple[Document, float]]:
+        """Return the top-``top_k`` ``(document, score)`` pairs ordered by cross-encoder score.
+
+        A score of ``1.0`` is emitted for bypass paths (reranker disabled, no
+        documents, or model not loaded) so downstream threshold filters have
+        a well-defined value. Active reranking uses FlagReranker's normalised
+        score (range ≈ [0, 1]).
+        """
+        # Bypass paths — top-K by input order, score 1.0 (passes any sane threshold).
         if not self.enabled or not documents:
-            return documents[:top_k]
+            return [(doc, 1.0) for doc in documents[:top_k]]
 
         self._load()
         if self._model is None:
@@ -89,10 +96,10 @@ class CrossEncoderReranker:
         scored = list(zip(documents, scores))
         scored.sort(key=lambda x: x[1], reverse=True)
 
-        result: list[Document] = []
+        result: list[tuple[Document, float]] = []
         for doc, score in scored[:top_k]:
             doc.metadata["rerank_score"] = score  # type: ignore[index]
-            result.append(doc)
+            result.append((doc, float(score)))
         return result
 
     def healthcheck(self) -> dict:
@@ -121,6 +128,13 @@ class CrossEncoderReranker:
                 max_length=16,
             )
             latency_ms = round((time.perf_counter() - start) * 1000, 2)
+
+            if isinstance(score, list):
+                if len(score) > 0:
+                    score = score[0]  # Extract the first (and only) score
+                else:
+                    result["error"] = "Empty score list returned"
+                    return result
 
             if not isinstance(score, (int, float)) or not (0.0 <= score <= 1.0):
                 result["error"] = f"Invalid score returned: {score}"
