@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     reranker_enabled: bool = Field(default=True, alias="RERANKER_ENABLED")
     reranker_device: str = Field(default="cuda", alias="RERANKER_DEVICE")
 
+    # --- NER enrichment ---
+    ner_enabled: bool = Field(default=True, alias="NER_ENABLED")
+    ner_device: str = Field(default="cpu", alias="NER_DEVICE")
+    ner_model_en: str = Field(default="dslim/bert-base-NER", alias="NER_MODEL_EN")
+    ner_model_id: str = Field(default="cahya/bert-base-indonesian-NER", alias="NER_MODEL_ID")
+    ner_batch_size: int = Field(default=32, alias="NER_BATCH_SIZE")
+
     query_transform_enabled: bool = Field(default=True, alias="QUERY_TRANSFORM_ENABLED")
 
     hybrid_candidate_multiplier: int = Field(
