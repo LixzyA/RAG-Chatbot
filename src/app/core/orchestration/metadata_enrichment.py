@@ -3,8 +3,6 @@
 No LLM, no FastAPI, no DB. Safe to test in isolation.
 """
 
-from __future__ import annotations
-
 import hashlib
 import os
 from datetime import datetime

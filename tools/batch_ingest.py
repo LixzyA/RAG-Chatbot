@@ -7,15 +7,15 @@ Usage::
     cd src/app
     uv run python ../../tools/batch_ingest.py path/to/docs/ --language en
     uv run python ../../tools/batch_ingest.py file.pdf --language id --no-ner
+    uv run python ../../tools/batch_ingest.py corpus.jsonl --language en
 """
-
-from __future__ import annotations
 
 import argparse
 import logging
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+import time
 
 # Ensure src/app is on sys.path so `app.*` imports resolve
 _THIS_FILE = Path(__file__).resolve()
@@ -28,8 +28,11 @@ from tqdm import tqdm
 
 from app.config import settings
 from app.core.pipeline.chunker import chunk_text
-from app.core.pipeline.document_loader import load_document_bytes
-from app.core.orchestration.metadata_enrichment import enrich_chunks, extract_base_metadata
+from app.core.pipeline.document_loader import load_document_bytes, load_jsonl_bytes
+from app.core.orchestration.metadata_enrichment import (
+    enrich_chunks,
+    extract_base_metadata,
+)
 from app.core.orchestration.ner_service import enrich_chunks_batch
 from app.core.retrieval.vector_store import VectorStore
 
@@ -39,7 +42,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("batch_ingest")
 
-_ALLOWED_SUFFIXES = frozenset({".txt", ".md", ".pdf"})
+_ALLOWED_SUFFIXES = frozenset({".txt", ".md", ".pdf", ".jsonl"})
 
 
 def read_all_files(root: Path) -> list[tuple[str, bytes]]:
@@ -56,19 +59,18 @@ def read_all_files(root: Path) -> list[tuple[str, bytes]]:
 
 
 def main() -> None:
+    start_time = time.perf_counter()
     parser = argparse.ArgumentParser(description="Batch ingest with NER enrichment")
+    parser.add_argument("path", type=Path, help="File or directory to ingest")
     parser.add_argument(
-        "path", type=Path, help="File or directory to ingest"
-    )
-    parser.add_argument(
-        "--language", default="en", choices=["en", "id"],
+        "--language",
+        default="en",
+        choices=["en", "id"],
         help="NER language for all chunks (default: en)",
     )
     parser.add_argument("--chunk-size", type=int, default=1024)
     parser.add_argument("--chunk-overlap", type=float, default=0.2)
-    parser.add_argument(
-        "--no-ner", action="store_true", help="Skip NER enrichment"
-    )
+    parser.add_argument("--no-ner", action="store_true", help="Skip NER enrichment")
     args = parser.parse_args()
 
     # Resolve input files
@@ -83,7 +85,7 @@ def main() -> None:
         sys.exit(1)
 
     if not files:
-        logger.warning("No supported files found (.txt, .md, .pdf)")
+        logger.warning("No supported files found (.txt, .md, .pdf, .jsonl)")
         sys.exit(0)
 
     tqdm.write(f"Found {len(files)} file(s) to ingest\n")
@@ -97,44 +99,130 @@ def main() -> None:
     tqdm.write("")
 
     total_added = 0
-    file_pbar = tqdm(files, desc="Ingesting files", unit="file", colour="green")
-    for filename, raw_bytes in file_pbar:
-        file_pbar.set_postfix_str(Path(filename).name)
+    for filename, raw_bytes in files:
+        short_name = Path(filename).name
+        is_jsonl = Path(filename).suffix.lower() == ".jsonl"
 
-        try:
-            text = load_document_bytes(filename, raw_bytes)
-        except Exception as exc:
-            tqdm.write(f"[SKIP] {filename}: {exc}")
-            continue
+        if is_jsonl:
+            try:
+                records = load_jsonl_bytes(filename, raw_bytes)
+            except Exception as exc:
+                tqdm.write(f"[SKIP] {filename}: {exc}")
+                continue
 
-        chunks = chunk_text(
-            text,
-            filename=filename,
-            chunk_size=args.chunk_size,
-            chunk_overlap=args.chunk_overlap,
-        )
-        if not chunks:
-            tqdm.write(f"[SKIP] {filename}: zero chunks produced")
-            continue
+            if not records:
+                tqdm.write(f"[SKIP] {filename}: zero valid JSONL records")
+                continue
 
-        # --- Heuristic enrichment (always on) ---
-        uploaded_at = datetime.now(timezone.utc)
-        base_meta = extract_base_metadata(filename=filename, uploaded_at=uploaded_at)
-        chunks = enrich_chunks(chunks, base_meta)
+            uploaded_at = datetime.now(timezone.utc)
+            base_meta = extract_base_metadata(
+                filename=filename, uploaded_at=uploaded_at
+            )
 
-        # --- NER enrichment (optional) ---
-        if not args.no_ner:
-            enrich_chunks_batch(chunks, language=args.language)
+            all_chunks: list = []
+            rec_pbar = tqdm(
+                records, desc=f"Records [{short_name}]", unit="rec", colour="green"
+            )
+            for text, record_meta in rec_pbar:
+                chunks = chunk_text(
+                    text,
+                    filename=filename,
+                    chunk_size=args.chunk_size,
+                    chunk_overlap=args.chunk_overlap,
+                )
+                if not chunks:
+                    continue
 
-        ids = [chunk.metadata.get("content_hash", f"{filename}_{i}") for i, chunk in enumerate(chunks)]
-        vs.add_documents_bulk(chunks, ids=ids)
-        total_added += len(chunks)
+                for chunk in chunks:
+                    chunk.metadata = {
+                        **base_meta,
+                        **record_meta,
+                        **dict(chunk.metadata or {}),
+                    }
 
-    file_pbar.close()
+                chunks = enrich_chunks(chunks, base_meta)
+                all_chunks.extend(chunks)
+                rec_pbar.set_postfix_str(f"{len(all_chunks)} chunks")
+
+            rec_pbar.close()
+
+            if not all_chunks:
+                tqdm.write(f"[SKIP] {filename}: zero chunks produced")
+                continue
+
+            if not args.no_ner:
+                tqdm.write(f"Running NER on {len(all_chunks)} chunks...")
+                enrich_chunks_batch(all_chunks, language=args.language)
+
+            ids = [
+                chunk.metadata.get("content_hash", f"{filename}_{i}")
+                for i, chunk in enumerate(all_chunks)
+            ]
+            seen_ids = set()
+            unique_chunks = []
+            unique_ids = []
+
+            for chunk, chunk_id in zip(all_chunks, ids):
+                if chunk_id not in seen_ids:
+                    seen_ids.add(chunk_id)
+                    unique_chunks.append(chunk)
+                    unique_ids.append(chunk_id)
+
+            for batch_start in range(0, len(unique_ids), 5000):
+                batch_end = batch_start + 5000
+                batch_chunks = unique_chunks[batch_start:batch_end]
+                batch_ids = unique_ids[batch_start:batch_end]
+
+                vs.add_documents_bulk(batch_chunks, ids=batch_ids)
+
+                total_added += len(batch_ids)
+                tqdm.write(
+                    f"  {short_name}: Added batch of {len(batch_ids)} chunks. Total so far: {total_added} (from {len(records)} original records)"
+                )
+
+        else:
+            tqdm.write(f"Ingesting {short_name}...")
+            try:
+                text = load_document_bytes(filename, raw_bytes)
+            except Exception as exc:
+                tqdm.write(f"[SKIP] {filename}: {exc}")
+                continue
+
+            chunks = chunk_text(
+                text,
+                filename=filename,
+                chunk_size=args.chunk_size,
+                chunk_overlap=args.chunk_overlap,
+            )
+            if not chunks:
+                tqdm.write(f"[SKIP] {filename}: zero chunks produced")
+                continue
+
+            uploaded_at = datetime.now(timezone.utc)
+            base_meta = extract_base_metadata(
+                filename=filename, uploaded_at=uploaded_at
+            )
+            chunks = enrich_chunks(chunks, base_meta)
+
+            if not args.no_ner:
+                tqdm.write(f"Running NER on {len(chunks)} chunks...")
+                enrich_chunks_batch(chunks, language=args.language)
+
+            ids = [
+                chunk.metadata.get("content_hash", f"{filename}_{i}")
+                for i, chunk in enumerate(chunks)
+            ]
+            vs.add_documents_bulk(chunks, ids=ids)
+            total_added += len(chunks)
+            tqdm.write(f"  {short_name}: {len(chunks)} chunks added")
+
     tqdm.write(f"\n{total_added} chunks staged — rebuilding BM25 index...")
 
     vs.rebuild_bm25()
     tqdm.write(f"Batch ingest complete — {total_added} total chunks, BM25 rebuilt")
+    end_time = time.perf_counter()
+    exec_time = end_time - start_time
+    tqdm.write(f"Execution took {exec_time:.6f} seconds")
 
 
 if __name__ == "__main__":

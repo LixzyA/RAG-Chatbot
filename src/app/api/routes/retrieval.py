@@ -36,10 +36,14 @@ async def retrieve(req: RetrieveRequest):
             req.query,
             req.top_k,
             settings.hybrid_candidate_multiplier,
+            filter=req.filter,
         )
     else:
         scored = await asyncio.to_thread(
-            vs.similarity_search, req.query, req.top_k
+            vs.similarity_search,
+            req.query,
+            req.top_k,
+            filter=req.filter,
         )
         docs = [doc for doc, _score in scored]
 

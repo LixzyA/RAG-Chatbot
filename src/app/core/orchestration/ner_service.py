@@ -1,16 +1,17 @@
-"""NER orchestration — batch entrypoint.
+"""NER orchestration — two entrypoints, one for FastAPI, one for batch.
 
+``enrich_chunks_route`` — auto-detects language per-chunk, routes NER, mutates metadata.
 ``enrich_chunks_batch`` — caller picks language, one model for all chunks.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import Any
+import json
 
 from langchain_core.documents import Document
 
 from app.config import settings
+from app.core.pipeline.language_detect import detect_language
 from app.core.pipeline.ner_extractor import NERExtractor
 
 logger = logging.getLogger(__name__)
@@ -30,15 +31,42 @@ def _entities_to_metadata(
     model_id: str,
     language: str,
 ) -> dict[str, Any]:
-    """Build the NER metadata fragment, or empty dict if no entities."""
+    """Build the NER metadata fragment, or minimal stub when no entities.
+
+    ``entities`` is serialised to JSON because ChromaDB metadata values must
+    be scalar primitives — list-of-dicts is rejected at insert time.
+    """
     if not entities:
         return {"language": language, "ner_model": model_id}
+
     return {
         "language": language,
         "ner_model": model_id,
-        "entities": entities,
+        "entities": json.dumps(entities),
         "entity_types": sorted({e["label"] for e in entities}),
     }
+
+
+def enrich_chunks_route(chunks: list[Document]) -> None:
+    """FastAPI path: detect language per chunk, run NER, mutate metadata.
+
+    Skips chunks whose language is not in ``{"en", "id"}`` (or whose text is
+    blank). Mutates ``chunk.metadata`` in place. The ``ner_enabled`` gate
+    lives in the caller — this fn always processes.
+    """
+    for chunk in chunks:
+        text = chunk.page_content
+        if not text.strip():
+            continue
+
+        lang = detect_language(text)
+        if lang == "unknown":
+            continue
+
+        extractor = _get_extractor(lang)
+        entities = extractor.extract(text)
+        ner_meta = _entities_to_metadata(entities, extractor.model_id, lang)
+        chunk.metadata.update(ner_meta)
 
 
 def enrich_chunks_batch(chunks: list[Document], language: str) -> None:

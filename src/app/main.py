@@ -17,6 +17,7 @@ from app.entity.base import init_db
 from app.services.vector_db import get_reranker, get_vector_store
 from app.utils.logger import setup_logging
 from app.utils.exceptions import handle_app_exception, AppException
+from prometheus_fastapi_instrumentator import Instrumentator
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -57,6 +58,7 @@ async def lifespan(app: FastAPI):
     # Background tasks so startup isn't blocked
     asyncio.create_task(_load_reranker(reranker))
     asyncio.create_task(_init_db())
+    instrumentator.expose(app)
 
     yield
 
@@ -89,7 +91,8 @@ app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(ingest_router)
 app.include_router(retrieval_router)
-
+Instrumentator().instrument(app).expose(app)
+instrumentator = Instrumentator().instrument(app)
 
 @app.exception_handler(AppException)
 async def app_exception_handler(request: Request, exc: AppException):

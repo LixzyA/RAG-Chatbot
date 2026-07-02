@@ -3,7 +3,21 @@
 Covers ingestion, retrieval, chat, and auth request bodies.
 """
 
-from pydantic import BaseModel, Field
+from typing import Any
+
+from pydantic import BaseModel, Field, field_validator
+
+
+ALLOWED_FILTER_KEYS: frozenset[str] = frozenset(
+    {
+        "file_type",
+        "language",
+        "file_name",
+        "ner_model",
+        "page",
+        "source",
+    }
+)
 
 
 # --------------------------------------------------------------------------
@@ -77,6 +91,35 @@ class RetrieveRequest(BaseModel):
     collection: str | None = Field(
         default=None, description="Override default collection"
     )
+    filter: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Metadata filter (curated allowlist). "
+            f"Keys: {sorted(ALLOWED_FILTER_KEYS)}. "
+            "Values: str | int | float | list[str]."
+        ),
+    )
+
+    @field_validator("filter")
+    @classmethod
+    def _validate_filter(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        if v is None:
+            return v
+        for key, val in v.items():
+            if key not in ALLOWED_FILTER_KEYS:
+                raise ValueError(
+                    f"Unknown filter key '{key}'. Allowed: {sorted(ALLOWED_FILTER_KEYS)}"
+                )
+            if isinstance(val, list):
+                if not all(isinstance(x, str) for x in val):
+                    raise ValueError(
+                        f"List filter values for '{key}' must be list[str] (Chroma $in semantics)"
+                    )
+            elif not isinstance(val, (str, int, float)):
+                raise ValueError(
+                    f"Filter value for '{key}' must be str|int|float|list[str], got {type(val).__name__}"
+                )
+        return v
 
 
 class RetrieveBatchRequest(BaseModel):

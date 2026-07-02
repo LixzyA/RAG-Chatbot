@@ -135,5 +135,3 @@ Before touching code that touches these areas, check CODE_REVIEW.md for the prio
 - Entity models use the `Mapped[...]` / `mapped_column(...)` declarative style (SQLAlchemy 2).
 - Pydantic is v2 throughout (`ConfigDict`, `model_validator`, `model_dump`, `Field` with `alias=`).
 - Frontend ↔ backend auth is a Bearer token from `localStorage.auth_token`, sent by `lib/api.ts:apiFetch` (set `requireAuth: false` for `/auth/*` and `/health`).
-</content>
-</invoke>

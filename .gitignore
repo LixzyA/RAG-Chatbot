@@ -252,7 +252,7 @@ report.md
 .chroma
 .bm25_cache
 .claude
-.langchain_chroma
+.langchain_chroma*
 .codegraph
 CODE_REVIEW.md
 TODO.md

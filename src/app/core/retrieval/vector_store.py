@@ -106,11 +106,21 @@ class VectorStore:
             logger.error("Failed to add documents in bulk: %s", exc)
             raise ChromaInsertionException(str(exc)) from exc
 
-    def similarity_search(self, query: str, k: int = 4) -> list[tuple[Document, float]]:
-        """Pure vector search."""
-        return self.vector_store.similarity_search_with_score(query, k=k)
+    def similarity_search(
+        self,
+        query: str,
+        k: int = 4,
+        filter: dict | None = None,
+    ) -> list[tuple[Document, float]]:
+        """Pure vector search. ``filter`` narrows by Chroma metadata (``where`` clause)."""
+        kwargs: dict = {"k": k}
+        if filter is not None:
+            kwargs["filter"] = filter
+        return self.vector_store.similarity_search_with_score(query, **kwargs)
 
-    def hybrid_search(self, query: str, k: int = 20) -> list[tuple[Document, float]]:
+    def hybrid_search(
+        self, query: str, k: int = 20, filter: dict | None = None
+    ) -> list[tuple[Document, float]]:
         """BM25 + Vector ensemble via LangChain ``EnsembleRetriever``.
 
         Returns ``[]`` when the corpus is empty (no documents uploaded yet).
@@ -134,7 +144,12 @@ class VectorStore:
                 return []
 
         self.bm25_retriever.k = k  # type: ignore[union-attr]
-        vector_retriever = self.vector_store.as_retriever(search_kwargs={"k": k})
+        vector_search_kwargs: dict = {"k": k}
+        if filter is not None:
+            vector_search_kwargs["filter"] = filter
+        vector_retriever = self.vector_store.as_retriever(
+            search_kwargs=vector_search_kwargs
+        )
 
         ensemble = EnsembleRetriever(
             retrievers=[self.bm25_retriever, vector_retriever],
@@ -145,7 +160,9 @@ class VectorStore:
         # Synthesise RRF scores keyed by doc fingerprint (page_content + meta hash).
         # ``id(doc)`` would also work but is meaningless across pickle reloads.
         scored_tuples: list[tuple[Document, float]] = []
-        scored_tuples = [(doc, self._rrf_score(ranked_docs, doc)) for doc in ranked_docs]
+        scored_tuples = [
+            (doc, self._rrf_score(ranked_docs, doc)) for doc in ranked_docs
+        ]
         return scored_tuples
 
     @staticmethod
@@ -162,7 +179,11 @@ class VectorStore:
         return 0.0
 
     def reranked_search(
-        self, query: str, k: int = 5, candidate_multiplier: int = 4
+        self,
+        query: str,
+        k: int = 5,
+        candidate_multiplier: int = 4,
+        filter: dict | None = None,
     ) -> list[Document]:
         """Two-stage retrieval: hybrid search followed by cross-encoder reranking.
 
@@ -171,7 +192,9 @@ class VectorStore:
         cross-encoder score is recorded on each ``Document.metadata['rerank_score']``
         so callers can still surface a ``score`` field via metadata lookup.
         """
-        candidates = self.hybrid_search(query, k=k * candidate_multiplier)
+        candidates = self.hybrid_search(
+            query, k=k * candidate_multiplier, filter=filter
+        )
         if not candidates:
             return []
         docs_only = [doc for doc, _score in candidates]
