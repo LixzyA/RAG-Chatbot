@@ -94,6 +94,7 @@ app.include_router(retrieval_router)
 Instrumentator().instrument(app).expose(app)
 instrumentator = Instrumentator().instrument(app)
 
+
 @app.exception_handler(AppException)
 async def app_exception_handler(request: Request, exc: AppException):
     return await handle_app_exception(request, exc)

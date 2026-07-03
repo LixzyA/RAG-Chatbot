@@ -1,8 +1,10 @@
 import asyncio
+import logging
 import time
 from collections.abc import AsyncIterable
-from dataclasses import dataclass, field
 from typing import Any
+
+from langchain_core.documents import Document
 
 from app.config import settings
 from app.core.generation.llm_client import get_llm_client
@@ -12,84 +14,12 @@ from app.core.generation.prompt_builder import (
 )
 from app.core.generation.response_parser import parse_sse_chunk
 from app.core.orchestration.query_processor import QueryProcessor
-from app.core.retrieval.vector_store import VectorStore
 from app.core.pipeline.embedder import Embedder
-from langchain_core.documents import Document
+from app.core.retrieval.vector_store import VectorStore
+from app.models.rag_trace import RAGTraceBuilder
 from app.utils.exceptions import LLMException
 
-
-import logging
-
 logger = logging.getLogger(__name__)
-
-
-# ------------------------------------------------------------------
-# Trace builder — populated by the chain, persisted by the route
-# ------------------------------------------------------------------
-
-
-@dataclass
-class RAGTraceBuilder:
-    """Mutable per-request trace state.
-
-    The chain's job is to populate this object during ``run()``. The route
-    layer reads the populated builder after the SSE stream completes and
-    writes one ``rag_traces`` row into the database. Keeping the shape
-    here (next to the producer) avoids leaking ORM concerns into ``core/``.
-    """
-
-    # Query pipeline
-    original_query: str = ""
-    transformation_technique: str | None = None
-    transformed_query: str | None = None
-
-    # Stage outputs (list[dict] — each dict mirrors one Document snapshot)
-    retrieved_chunks: list[dict[str, Any]] = field(default_factory=list)
-    reranked_chunks: list[dict[str, Any]] = field(default_factory=list)
-    context_passed_to_llm: list[dict[str, Any]] = field(default_factory=list)
-
-    # LLM results
-    llm_response: str = ""
-
-    # Model identifiers (best-effort — empty if unknown)
-    llm_model_name: str | None = None
-    embedding_model_name: str | None = None
-
-    # Per-stage latencies (milliseconds)
-    retrieval_latency_ms: float | None = None
-    rerank_latency_ms: float | None = None
-    llm_latency_ms: float | None = None
-
-    # Token accounting (filled when known; left None otherwise).
-    input_tokens: int | None = None
-    output_tokens: int | None = None
-
-    # ------------------------------------------------------------------
-    # Timing helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _ms(start: float) -> float:
-        return round((time.perf_counter() - start) * 1000, 3)
-
-    def start_retrieval(self) -> float:
-        return time.perf_counter()
-
-    def stop_retrieval(self, start: float) -> None:
-        self.retrieval_latency_ms = self._ms(start)
-
-    def start_rerank(self) -> float:
-        return time.perf_counter()
-
-    def stop_rerank(self, start: float) -> None:
-        self.rerank_latency_ms = self._ms(start)
-
-    def start_llm(self) -> float:
-        return time.perf_counter()
-
-    def stop_llm(self, start: float) -> None:
-        self.llm_latency_ms = self._ms(start)
-
 
 # ------------------------------------------------------------------
 # Chain
@@ -130,6 +60,7 @@ class RAGChain:
         top_k: int = 10,
         threshold: float | None = None,
         builder: RAGTraceBuilder | None = None,
+        bypass_transform: bool = False,
     ) -> tuple[list[Document], list[Document]]:
         """Retrieve, optionally rerank, and return ``(pre_rerank_docs, final_docs)``.
 
@@ -142,6 +73,9 @@ class RAGChain:
         ``RAG_MIN_RELEVANCE``). When the reranker is disabled or unavailable,
         threshold filtering is skipped — there are no real relevance scores to
         compare against.
+
+        When ``bypass_transform`` is ``True`` (used by the self-feedback re-retrieval
+        path), the query is used as-is without classification or rewriting.
 
         Sync CPU work (Chroma/BM25 + cross-encoder) runs on a worker thread via
         ``asyncio.to_thread`` so the FastAPI event loop stays responsive.
@@ -163,7 +97,17 @@ class RAGChain:
 
         # 1. Transform the query (classification + expansion)
         ret_start = builder.start_retrieval() if builder else None
-        transform_result = await self.query_processor.transform(query)
+
+        if bypass_transform:
+            transform_result = {
+                "original_query": query,
+                "query_type": "feedback_rewrite",
+                "strategy": "passthrough",
+                "transformed_queries": [query],
+                "confidence": 1.0,
+            }
+        else:
+            transform_result = await self.query_processor.transform(query)
 
         if builder:
             builder.original_query = query
@@ -329,6 +273,7 @@ class RAGChain:
         threshold: float | None = None,
         builder: RAGTraceBuilder | None = None,
         previous_query: str | None = None,
+        self_feedback_enabled: bool = False,
     ) -> AsyncIterable[str]:
         """End-to-end RAG pipeline: retrieve → prompt → stream.
 
@@ -380,10 +325,139 @@ class RAGChain:
             return
 
         context = self._build_context(docs_final)
-        async for chunk in self.generate_stream(
-            query,
-            context,
-            builder=builder,
-            previous_query=previous_query,
-        ):
-            yield chunk
+
+        if not self_feedback_enabled:
+            async for chunk in self.generate_stream(
+                query,
+                context,
+                builder=builder,
+                previous_query=previous_query,
+            ):
+                yield chunk
+            return
+
+        # --- Self-Feedback Loop (buffered) ---
+        from app.core.orchestration.feedback import SelfFeedbackLoop
+
+        loop = SelfFeedbackLoop()
+        iteration = 0
+        best_answer = ""
+        best_score = -1.0
+        system_prompt: str | None = None
+        start_time = time.perf_counter()
+
+        while iteration <= settings.self_feedback_max_iterations:
+            chunks: list[str] = []
+            async for chunk in self.generate_stream(
+                query,
+                context,
+                builder=builder if iteration == 0 else None,
+                previous_query=previous_query,
+                system_prompt=system_prompt,
+            ):
+                chunks.append(chunk)
+            answer = "".join(chunks)
+
+            try:
+                result = await loop.evaluate(answer, docs_final, query)
+            except Exception as exc:
+                logger.warning(
+                    "Feedback evaluation failed at iteration %d: %s", iteration, exc
+                )
+                best_answer = answer
+                break
+
+            if result.composite_score > best_score:
+                best_score = result.composite_score
+                best_answer = answer
+
+            if builder is not None:
+                builder.feedback_scores.append(
+                    {
+                        "iteration": iteration,
+                        "faithfulness": result.faithfulness,
+                        "relevance": result.relevance,
+                        "completeness": result.completeness,
+                        "critique": result.critique,
+                        "needs_refinement": result.needs_refinement,
+                        "hallucination_detected": result.hallucination_detected,
+                        "missing_from_context": result.missing_from_context,
+                    }
+                )
+                builder.feedback_iterations = iteration + 1
+
+            if not result.needs_refinement:
+                best_answer = answer
+                break
+
+            # Check latency budget
+            total_latency_ms = (time.perf_counter() - start_time) * 1000
+            if total_latency_ms > settings.self_feedback_max_latency_ms:
+                logger.warning(
+                    "Self-feedback latency budget exceeded (%.0f ms > %d ms), "
+                    "returning best answer (score=%.2f)",
+                    total_latency_ms,
+                    settings.self_feedback_max_latency_ms,
+                    best_score,
+                )
+                break
+
+            # --- Refinement strategy ---
+            # Two paths per the plan:
+            #   Irrelevant context → rewrite query + re-retrieve
+            #   Ungrounded/incomplete → regenerate with correction instruction
+            strategy_label: str
+            if result.relevance < settings.self_feedback_threshold:
+                rewritten = await self.query_processor.rewrite_with_feedback(
+                    query, result.critique
+                )
+                new_query = rewritten[0]
+                strategy_label = f"re_retrieve: {new_query}"
+
+                logger.info(
+                    "Self-feedback: re-retrieving with rewritten query: %s", new_query
+                )
+                _, docs_final = await self.retrieve(
+                    new_query,
+                    top_k=top_k,
+                    threshold=threshold,
+                    builder=builder,
+                    bypass_transform=True,
+                )
+
+                if not docs_final:
+                    logger.warning(
+                        "Self-feedback: re-retrieval returned no results for: %s",
+                        new_query,
+                    )
+                    break
+
+                context = self._build_context(docs_final)
+                system_prompt = None  # context changed — reset instruction
+            else:
+                instruction = await loop.refine_and_regenerate(
+                    query, answer, result, docs_final
+                )
+                strategy_label = f"refine: {instruction[:80]}..."
+
+                system_prompt = f"{get_generation_system_prompt()}\n\n{instruction}"
+
+            if builder is not None and builder.feedback_scores:
+                builder.feedback_scores[-1]["strategy"] = strategy_label
+
+            iteration += 1
+        else:
+            # Max iterations reached without breaking
+            logger.warning(
+                "Self-feedback max iterations reached, returning best answer (score=%.2f)",
+                best_score,
+            )
+
+        if builder is not None:
+            builder.feedback_final_score = best_score if best_score >= 0 else None
+            builder.llm_response = best_answer
+
+        # Simulate streaming by yielding in small slices
+        CHUNK_SIZE = 20
+        for i in range(0, len(best_answer), CHUNK_SIZE):
+            yield best_answer[i : i + CHUNK_SIZE]

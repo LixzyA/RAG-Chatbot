@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import logging
 import uuid
 from typing import Annotated
@@ -14,8 +12,11 @@ from app.api.dependencies import (
     get_db,
     get_rag_chain_dep,
 )
-from app.core.orchestration.rag_chain import RAGChain, RAGTraceBuilder
+from app.config import settings
+from app.core.orchestration.rag_chain import RAGChain
+from app.entity.feedback_log import FeedbackLog
 from app.entity.rag_traces import RAG_traces
+from app.models.rag_trace import RAGTraceBuilder
 from app.models.requests import ChatQueryRequest
 from app.services import chat_history_service
 from app.utils.exceptions import AppException
@@ -60,6 +61,33 @@ async def record_rag_trace(
         )
         db.add(trace)
         await db.commit()
+        await db.refresh(trace)  # populate trace.id for FK
+
+        # Persist per-iteration feedback logs.
+        if builder.feedback_scores:
+            for score_entry in builder.feedback_scores:
+                db.add(
+                    FeedbackLog(
+                        rag_trace_id=trace.id,
+                        session_id=session_id,
+                        iteration=score_entry["iteration"],
+                        query_used=builder.original_query,
+                        draft_answer=builder.llm_response,
+                        faithfulness=score_entry.get("faithfulness"),
+                        relevance=score_entry.get("relevance"),
+                        completeness=score_entry.get("completeness"),
+                        composite_score=min(
+                            score_entry.get("faithfulness", 1.0),
+                            score_entry.get("relevance", 1.0),
+                            score_entry.get("completeness", 1.0),
+                        ),
+                        critique=score_entry.get("critique"),
+                        refinement_strategy=score_entry.get("strategy"),
+                        passed=not score_entry.get("needs_refinement", False),
+                    )
+                )
+            await db.commit()
+
         logger.debug(
             "Recorded rag_traces row for query: %s", builder.original_query[:80]
         )
@@ -107,12 +135,19 @@ async def chat(
 
     # Save user message
     if query_req.chat_id and user_id is not None:
-        await chat_history_service.add_message(
-            db,
-            query_req.chat_id,
-            {"id": str(uuid.uuid4()), "role": "user", "content": query_req.prompt},
-            user_id=user_id,
-        )
+        try:
+            await chat_history_service.add_message(
+                db,
+                query_req.chat_id,
+                {"id": str(uuid.uuid4()), "role": "user", "content": query_req.prompt},
+                user_id=user_id,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to save user message (non-fatal)")
+            try:
+                await db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
 
     assistant_msg_id = str(uuid.uuid4())
     builder = RAGTraceBuilder()
@@ -124,6 +159,8 @@ async def chat(
                 top_k=query_req.top_k,
                 builder=builder,
                 previous_query=previous_query,
+                self_feedback_enabled=settings.self_feedback_enabled
+                or query_req.self_check,
             ):
                 yield format_sse_event(data_str=chunk)
         except AppException as exc:
@@ -148,17 +185,24 @@ async def chat(
                 )
 
             # Save assistant message
-            if query_req.chat_id and user_id is not None and builder.llm_response:
-                await chat_history_service.add_message(
-                    db,
-                    query_req.chat_id,
-                    {
-                        "id": assistant_msg_id,
-                        "role": "assistant",
-                        "content": builder.llm_response,
-                    },
-                    user_id=user_id,
-                )
+            if query_req.chat_id and user_id is not None:
+                try:
+                    await chat_history_service.add_message(
+                        db,
+                        query_req.chat_id,
+                        {
+                            "id": assistant_msg_id,
+                            "role": "assistant",
+                            "content": builder.llm_response or "",
+                        },
+                        user_id=user_id,
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception("Failed to save assistant message (non-fatal)")
+                    try:
+                        await db.rollback()
+                    except Exception:  # noqa: BLE001
+                        pass
 
     return EventSourceResponse(event_stream())
 

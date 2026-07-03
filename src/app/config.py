@@ -77,6 +77,16 @@ class Settings(BaseSettings):
 
     log_dir: Path = Field(default=PROJECT_ROOT / "logs", alias="LOG_DIR")
 
+    # --- Self-Feedback Loop ---
+    self_feedback_enabled: bool = Field(default=False, alias="SELF_FEEDBACK_ENABLED")
+    self_feedback_max_iterations: int = Field(
+        default=2, alias="SELF_FEEDBACK_MAX_ITERATIONS"
+    )
+    self_feedback_threshold: float = Field(default=0.7, alias="SELF_FEEDBACK_THRESHOLD")
+    self_feedback_max_latency_ms: int = Field(
+        default=15000, alias="SELF_FEEDBACK_MAX_LATENCY_MS"
+    )
+
 
 settings = Settings()
 

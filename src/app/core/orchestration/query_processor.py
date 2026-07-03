@@ -59,6 +59,16 @@ Question: {query}
 
 Passage:"""
 
+_FEEDBACK_REWRITE_PROMPT = """The user asked a question but the search results were irrelevant.
+
+Original query: {query}
+
+Why the search was off-target: {critique}
+
+Rewrite the user's query into a better search query that would find documents actually relevant to what they need. Be specific and include key terms the user might be looking for. Output only the rewritten query.
+
+Rewritten query:"""
+
 QUERY_TYPE_TO_STRATEGY: dict[str, str] = {
     "factual": "rewrite",
     "multi_part": "decompose",
@@ -215,6 +225,29 @@ class QueryProcessor:
             return [passage]
         except Exception as exc:
             logger.warning("HyDE generation failed, using original: %s", exc)
+            return [query]
+
+    async def rewrite_with_feedback(self, query: str, critique: str) -> list[str]:
+        """Reformulate *query* using the critic's relevance feedback.
+
+        Called by the self-feedback loop when the critic scores relevance below
+        threshold — the original retrieval context didn't match user intent.
+        Returns a single-element list containing the rewritten query (keeps the
+        same return shape as the other transformation methods).
+        """
+        prompt = _FEEDBACK_REWRITE_PROMPT.format(query=query, critique=critique)
+        try:
+            raw = await self._llm_call(
+                system_prompt="You are a search query optimizer. Output only the rewritten query.",
+                user_prompt=prompt,
+                max_tokens=256,
+            )
+            rewritten = raw.strip().strip("\"'")
+            if not rewritten:
+                return [query]
+            return [rewritten]
+        except Exception as exc:
+            logger.warning("Feedback-based query rewrite failed: %s", exc)
             return [query]
 
     # ------------------------------------------------------------------

@@ -45,6 +45,10 @@ class ChatQueryRequest(BaseModel):
     prompt: str
     top_k: int = 10
     chat_id: str | None = None
+    self_check: bool = Field(
+        default=False,
+        description="Enable per-request self-feedback loop for A/B testing",
+    )
 
 
 # --------------------------------------------------------------------------
