@@ -1,137 +1,120 @@
-# CLAUDE.md
+# Project Overview
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+RAG Chatbot — a FastAPI backend + React/Vite frontend. Primary users are general people who will try to chat to the system.
+The product optimizes for:
+- Factual, grounded answers
+- Speed of response
+- Fluidity of the system
+- Easily traceable results
 
-## Development Commands
+## Common Commands
 
-### Backend (Python/FastAPI) — root: `src/app/`
+### Backend
+Run from repo root unless noted:
 
 ```bash
-cd src/app
-uv sync                          # install (venv lives at src/app/.venv)
-fastapi dev main.py              # or: uv run fastapi dev
-uvicorn main:app --reload --port 8000
+# Start dev server
+cd src/app && uv run fastapi dev
+
+# Print parsed config (env vars + defaults)
+cd src/app && uv run python config.py
+
+# Run one Python file
+cd src/app && uv run python -m app.api.routes.generation
+
+# Code quality (hook runs `uvx ruff check .; uvx ruff format` on every Edit/Write)
+uvx ruff check src/app
+uvx ruff format src/app
+
+# Reindex codegraph
+codegraph index .
 ```
 
-Requires **Python == 3.11.15** (pinned in `src/app/pyproject.toml`). PyTorch index is declared in the same file.
-
-### Frontend (React/Vite/TypeScript) — root: `src/frontend/`
-
+### Frontend
 ```bash
 cd src/frontend
-npm install
-npm run dev          # port 5173
-npm run build        # tsc -b && vite build
-npm run lint         # ESLint
-npm run typecheck    # tsc --noEmit
-npm run format       # Prettier
+npm run dev       # Vite dev server (http://localhost:5173)
+npm run build     # Production build
+npm run lint      # ESLint
+npm run typecheck # tsc --noEmit
 ```
 
-Node.js ≥ 18 (package.json pins Vite 7 / React 19 / TS 5.9).
-
-### Environment
-
-Create `.env` at repo root (read by `src/app/config.py` via `PROJECT_ROOT/.env`). All LLM calls go through `huggingface_hub`'s `AsyncInferenceClient()`, which reads `HF_TOKEN`. See `.env.example` for the canonical key list. Reference documentation for all env vars is in `src/app/config.py` (one field per var, with `alias=` naming the env name).
-
-## High-Level Architecture
-
-A two-model **RAG chatbot**: user query → optional query transformation → hybrid retrieval (BM25 + vector) → cross-encoder rerank → streamed back from a single generation LLM via SSE.
-
-- **`router_model`** (small, ~1B) handles all query-classification and query-transformation work in `core/orchestration/query_processor.py`: classify topic → rewrite / decompose / HyDE / passthrough.
-- **`generation_model`** (large) produces the final answer in `core/orchestration/rag_chain.py:generate_stream` from the top-k reranked chunks.
-
-The previous specialist/generalist split has been collapsed into the single generation model. `core/generation/prompt_builder.py` exposes one prompt: `get_generation_system_prompt()`.
-
-### Backend layout (`src/app/`)
-
-```
-main.py                          # FastAPI app + lifespan (init singletons + DB, shutdown resets)
-api/
-  dependencies.py                 # DI providers (get_db, get_rag_chain_dep, auth guards)
-  routes/
-    auth.py                      # POST /auth/{register,login}, GET /auth/me
-    generation.py                # POST /chat/ (SSE) + /chat/histories CRUD + rag_traces persistence
-    health.py                    # GET /health
-    ingestion.py                 # POST /ingest
-    retrieval.py                 # POST /retrieve
-core/                            # framework-agnostic — NO FastAPI imports, reusable + testable
-  orchestration/
-    query_processor.py           # classify / rewrite / decompose / HyDE / passthrough
-    rag_chain.py                 # RAG pipeline + RAGTraceBuilder (per-request observability)
-  generation/                    # llm_client, prompt_builder, response_parser
-  retrieval/                     # vector_store (ChromaDB + EnsembleRetriever) + reranker
-  pipeline/                      # document_loader, chunker, text_splitter, embedder, ranker (RRF)
-entity/                          # SQLAlchemy ORM (Base, User, ChatSession, ChatMessage, RAG_traces)
-models/                          # Pydantic v2 request/response + Document models
-services/                        # thin: singletons (VectorStore, Reranker, RAGChain) + DB-aware fns
-                                 # all fns take AsyncSession via DI; chat_history_service, auth_service
-utils/                           # logger (setup_logging from main.py), exceptions, telemetry
+### Tools
+```bash
+# Batch ingestion (runs outside FastAPI — direct VectorStore construction)
+cd src/app
+uv run python ../../tools/batch_ingest.py path/to/docs/ --language en
 ```
 
-**Layer rule:** `core/` is framework-agnostic and never imports `api/`, `entity/`, or `models/`. `services/` owns the session-bound/singleton side. `api/routes/` is the only seam that ties them together (and is where `RAGTraceBuilder` → `RAG_traces` persistence happens — `api/routes/generation.py:record_rag_trace`).
+## Architecture
 
-### Singletons
+### Layer map
 
-`VectorStore`, `Reranker`, and `RAGChain` are factored as lazy singletons in `services/`. They are materialised by `lifespan` in `main.py` (reranker is loaded in a background task so it doesn't block startup) and reset on shutdown.
-
-### Frontend layout (`src/frontend/src/`)
+Routes (`api/routes/`) are thin. Business logic lives in `services/` (singletons) and `core/` (framework-agnostic). `entity/` is SQLAlchemy ORM. `models/` is Pydantic request/response schemas.
 
 ```
-App.tsx + main.tsx               # BrowserRouter, AuthProvider, theme provider
-contexts/AuthContext.tsx         # token + user state, localStorage persistence
-lib/api.ts                       # apiFetch — prepends http://localhost:8000, injects Bearer token
-components/Navbar.tsx, ProtectedRoute.tsx, ui/ (shadcn)
-pages/Chat.tsx, Files.tsx, Home.tsx, Login.tsx, Register.tsx
+api/routes/          HTTP/WS interface
+├── services/        Singleton lifecycle + business logic entrypoints
+│   ├── vector_db.py     (VectorStore, Reranker)
+│   ├── rag_chain.py     (RAGChain)
+│   ├── chat_history_service.py
+│   └── auth_service.py
+├── core/              Framework-agnostic (NO FastAPI imports, NO DB imports)
+│   ├── orchestration/   (RAGChain, QueryProcessor)
+│   ├── retrieval/       (VectorStore, CrossEncoderReranker)
+│   ├── pipeline/        (chunker, document_loader, NER, embedder)
+│   └── generation/      (llm_client, prompt_builder, response_parser)
+├── entity/            SQLAlchemy ORM models (async aiosqlite)
+└── models/            Pydantic v2 request/response schemas
 ```
 
-Tailwind CSS v4 (`@tailwindcss/vite`), React 19, shadcn/ui primitives.
+**Rule**: `core/` never imports from `api/`, `entity/`, or `services/`.
 
-## Key Data Flows
+### Singletons & startup lifecycle
 
-**Chat (`POST /chat/`, SSE):**
-1. Route validates auth (optional), resolves `chat_id` → int FK via `chat_history_service.get_internal_session_id`, saves user message.
-2. `RAGChain.run(prompt, builder=RAGTraceBuilder())`:
-   - `QueryProcessor` classifies topic (or rewrites / HyDE-decomposes if `QUERY_TRANSFORM_ENABLED=true`).
-   - `VectorStore` runs hybrid (BM25 + cosine) ensemble → returns N×`top_k` candidates, then `Reranker` (BAAI/bge-reranker-v2-m3, lazy-loaded, optional via `RERANKER_ENABLED`) cuts to `top_k`.
-   - `prompt_builder` injects chunks as context into the single generation system prompt.
-   - `AsyncInferenceClient.chat.completions.create(stream=True)` yields tokens; route passes chunks through SSE.
-3. After `[DONE]`: route writes one `RAG_traces` row from the populated `RAGTraceBuilder` (latencies + per-stage snapshots), then saves the assistant message. Trace-write failures are logged + swallowed — they never break the response.
+`main.py` `lifespan()` calls `get_vector_store()` and `get_reranker()` to trigger creation, then loads the reranker & initializes the DB in background tasks. Routes depend on them via `api/dependencies.py` (`get_rag_chain_dep`, `get_vector_db`, `get_reranker_dep`). `services/rag_chain.py` wires these together lazily.
 
-**Ingestion (`POST /ingest`):** file → extension validation → text extraction (pdfminer.six for PDFs) → `RecursiveCharacterTextSplitter` (tiktoken, `chunk_size=1024`, 20% overlap) → embed (`sentence-transformers/all-MiniLM-L6-v2`) → ChromaDB.
+### Data flow (chat request)
 
-**Auth:** JWT (HS256) issued by `auth/service.py`, validated by `api/dependencies.py:AuthenticatedUser` / `OptionalAuthenticatedUser`. Passwords hashed with argon2 via `pwdlib`.
+`POST /chat` → `generation.py:chat()` → `RAGChain.run()`:
 
-## Architectural decisions worth knowing
+1. **Retrieve**: `RAGChain.retrieve()`
+   - `QueryProcessor.transform()` → classify/rewrite/decompose/HyDE (router model)
+   - `VectorStore.hybrid_search()` → BM25 + vector ensemble via `EnsembleRetriever`
+   - `CrossEncoderReranker.rerank()` → rerank by cross-encoder score
+   - Threshold filter (`settings.rag_min_relevance`, default 0.5)
+2. **Generate**: `RAGChain.generate_stream()`
+   - `build_rag_prompt()` assembles context + current query + optional `previous_query` (last user turn, used for conversational grounding only, no impact on retrieval)
+   - `AsyncInferenceClient` streams the LLM response
+3. **Stream**: SSE tokens to the frontend, terminated by `[DONE]`
+4. **Persist**: `RAGTraceBuilder` is populated throughout the chain, then written to `rag_traces` by the route layer (`record_rag_trace`). Then the assistant message is saved to `messages`.
 
-- **Two models in the system, set via env-overridable fields in `config.py`:**
-  - `router_model` (default `meta-llama/Llama-3.2-1B-Instruct`, alias `ROUTER_MODEL`) — used by `QueryProcessor` for classify / rewrite / decompose / HyDE.
-  - `generation_model` (default `google/gemma-4-31B-it`, alias `GENERATION_MODEL`) — used by `generate_stream` for the final answer and by `llm_client.healthcheck`.
-- **Hybrid retrieval:** EnsembleRetriever weights BM25 0.3 / vector 0.7. `HYBRID_CANDIDATE_MULTIPLIER` (default 4) controls the pre-rerank fan-out.
-- **DB:** SQLite via `aiosqlite` (async). Schema created via `entity/base.py:init_db` on startup. Chat sessions use soft-delete + auto-title.
-- **History persistence:** Messages stored as JSON column on `ChatMessage`, keyed by string UUID `session_uuid` (clients see strings; FK to `chat_sessions.id` is the int PK).
-- **Observability:** Inline RAG trace persistence (`api/routes/generation.py:record_rag_trace`) — no new service module, by design. Anonymous queries (no `chat_id`, no user) still emit a `rag_traces` row with both FKs `NULL` (nullable + `ON DELETE SET NULL`).
-- **Embedding / reranker models:** Pre-downloaded on first use; reranker load is deferred to a `lifespan` background task so it never blocks server start.
+## Important Conventions
 
-## Working in this codebase
+- **`core/` is framework-agnostic**: never import FastAPI, SQLAlchemy, or any route/entity/service module here. `core/` raises `AppException` subclasses (from `utils/exceptions.py`) for domain errors. Keep it pure so it is unit-testable.
+- **Singletons**: `services/vector_db.py` owns `VectorStore` + `Reranker`, `services/rag_chain.py` owns `RAGChain`. Access them via the dependency functions in `api/dependencies.py` if inside a route; direct `get_*()` calls are fine too since they cache.
+- **Async DB**: `services/` functions take `AsyncSession` as the first param (DI). Use `chat_history_service` and `auth_service` for DB access.
+- **SSE protocol**: `POST /chat` streams SSE. Each event is a raw text chunk. The client (`frontend/src/pages/Chat.tsx`) listens for `data: ` lines and appends them. The stream ends with a `[DONE]` event.
+- **Chroma DB**: `VectorStore.hybrid_search()` can return `[]` when the collection is empty — the RAG chain turns this into a friendly message to the user.
 
-### CodeGraph is enabled
+# Coding Conventions
+- Helper functions do not need to have try except clause. Keep the try except clause in the worker function.
+- Keep components focused and composable
+- Extract repeated logics into helper functions
+- prefer descriptive variable names over abbreviations
+- Do not leave dead code or commented out blocks
+- Do not use __future__ annotations
+- Add comments only when intent is non obvious
+- Keep API endpoint functions slim
+- Prefer pydantic BaseModel over dataclass
+- Export all public apis to __init__.py
+- do not create a function inside a function
+- do not create a class inside a class
+- prefer creating custom exception class and catch using the exception class
 
-A `.codegraph/` index exists at the repo root — reach for `codegraph_explore` (with `mcp__codegraph__codegraph_explore` if available) **before** reading files or grepping when you need to understand or locate code. ONE call returns the verbatim source of the relevant symbols grouped by file plus the call path between them — treat returned source as already Read.
+# Files and component placements
+- Add services into src/app/services folder
+- Only create a new file if there are no file that is associated with the new module
+- Do not create new abstraction for one off usage
+- Prefer editing existing components over creating near duplicates
 
-### CODE_REVIEW.md is the source of design truth
-
-`CODE_REVIEW.md` at the repo root records the refactor's bug-fix history, layer-boundary rationale, and **three remaining open items**:
-
-1. `SUGGESTION #4` — drop `src/app/py.typed` (PEP 561 marker) so type checkers honour inline annotations.
-2. `SUGGESTION #5` — replace `# type: ignore` comments in `core/retrieval/vector_store.py` and `core/retrieval/reranker.py` with thin typed wrappers / `.pyi` stubs.
-3. `SUGGESTION #8` — wire `tenacity` retry logic around the three LLM call sites (`core/generation/llm_client.py`, `core/orchestration/query_processor.py:_llm_call`, `core/orchestration/rag_chain.py:generate_stream`). `tenacity` is already installed.
-
-Before touching code that touches these areas, check CODE_REVIEW.md for the prior reasoning.
-
-### Practical reminders
-
-- `setup_logging()` is called once from `main.py` — don't call it elsewhere.
-- `core/` raises `utils/exceptions.py` framework-agnostic error types; only `api/routes/` translates them to `HTTPException`.
-- Entity models use the `Mapped[...]` / `mapped_column(...)` declarative style (SQLAlchemy 2).
-- Pydantic is v2 throughout (`ConfigDict`, `model_validator`, `model_dump`, `Field` with `alias=`).
-- Frontend ↔ backend auth is a Bearer token from `localStorage.auth_token`, sent by `lib/api.ts:apiFetch` (set `requireAuth: false` for `/auth/*` and `/health`).

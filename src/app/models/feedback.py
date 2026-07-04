@@ -9,7 +9,6 @@ class EvaluationResult(BaseModel):
     relevance: float
     completeness: float
     critique: str
-    needs_refinement: bool
     hallucination_detected: bool = False
     missing_from_context: list[str] = Field(default_factory=list)
 
@@ -19,4 +18,7 @@ class EvaluationResult(BaseModel):
 
     @property
     def passes(self) -> bool:
-        return self.composite_score >= settings.self_feedback_threshold
+        return (
+            not self.hallucination_detected
+            and self.composite_score >= settings.self_feedback_threshold
+        )

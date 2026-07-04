@@ -6,7 +6,7 @@ import re
 from langchain_core.documents import Document
 
 from app.config import settings
-
+from app.core.generation.llm_client import get_llm_client
 from app.models import EvaluationResult
 
 logger = logging.getLogger(__name__)
@@ -32,10 +32,9 @@ Evaluate the answer on three dimensions (each 0.0-1.0):
 Also identify:
 - hallucination_detected: true if any claim in the answer contradicts or cannot be found in the context
 - missing_from_context: list of key topics present in the context but absent from the answer
-- needs_refinement: true if any score < {threshold}
 
 Output JSON only:
-{{"faithfulness": ..., "relevance": ..., "completeness": ..., "critique": "...", "hallucination_detected": ..., "missing_from_context": [...], "needs_refinement": ...}}
+{{"faithfulness": ..., "relevance": ..., "completeness": ..., "critique": "...", "hallucination_detected": ..., "missing_from_context": [...]}}
 """
 
 
@@ -55,7 +54,6 @@ class SelfFeedbackLoop:
         query: str,
     ) -> EvaluationResult:
         """Run the critic LLM over answer + context + query. Returns structured scores."""
-        from app.core.generation.llm_client import get_llm_client
 
         context = "\n\n".join(
             f"[{i + 1}] {doc.page_content}" for i, doc in enumerate(context_docs)
@@ -90,7 +88,6 @@ class SelfFeedbackLoop:
                 relevance=1.0,
                 completeness=1.0,
                 critique="Critic LLM call failed, falling open.",
-                needs_refinement=False,
             )
 
         # Parse JSON
@@ -121,7 +118,6 @@ class SelfFeedbackLoop:
                 relevance=1.0,
                 completeness=1.0,
                 critique="Critic response parsing failed.",
-                needs_refinement=False,
             )
 
         return EvaluationResult(
@@ -129,7 +125,6 @@ class SelfFeedbackLoop:
             relevance=float(result.get("relevance", 1.0)),
             completeness=float(result.get("completeness", 1.0)),
             critique=result.get("critique", ""),
-            needs_refinement=result.get("needs_refinement", False),
             hallucination_detected=result.get("hallucination_detected", False),
             missing_from_context=result.get("missing_from_context", []),
         )
@@ -137,9 +132,7 @@ class SelfFeedbackLoop:
     async def refine_and_regenerate(
         self,
         query: str,
-        answer: str,  # noqa: ARG002
         evaluation: EvaluationResult,
-        context_docs: list[Document],  # noqa: ARG002
     ) -> str:
         """Apply the appropriate refinement strategy based on failure mode.
 

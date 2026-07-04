@@ -91,11 +91,11 @@ async def record_rag_trace(
         logger.debug(
             "Recorded rag_traces row for query: %s", builder.original_query[:80]
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.exception("Failed to persist rag_traces row (non-fatal): %s", exc)
         try:
             await db.rollback()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
 
@@ -142,11 +142,11 @@ async def chat(
                 {"id": str(uuid.uuid4()), "role": "user", "content": query_req.prompt},
                 user_id=user_id,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("Failed to save user message (non-fatal)")
             try:
                 await db.rollback()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
     assistant_msg_id = str(uuid.uuid4())
@@ -170,7 +170,7 @@ async def chat(
                 exc.message,
             )
             yield format_sse_event(data_str=f"[ERROR] {exc.message}")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.exception("SSE: unexpected failure in chain.run")
             yield format_sse_event(data_str=f"[ERROR] Unexpected error: {exc}")
         finally:
@@ -197,11 +197,11 @@ async def chat(
                         },
                         user_id=user_id,
                     )
-                except Exception:  # noqa: BLE001
+                except Exception:
                     logger.exception("Failed to save assistant message (non-fatal)")
                     try:
                         await db.rollback()
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
 
     return EventSourceResponse(event_stream())

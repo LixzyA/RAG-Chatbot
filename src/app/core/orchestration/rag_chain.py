@@ -18,6 +18,8 @@ from app.core.pipeline.embedder import Embedder
 from app.core.retrieval.vector_store import VectorStore
 from app.models.rag_trace import RAGTraceBuilder
 from app.utils.exceptions import LLMException
+from app.core.orchestration.feedback import SelfFeedbackLoop
+
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +47,7 @@ class RAGChain:
     ) -> None:
         self.vector_store = vector_store
         self.use_reranker = use_reranker
-        self.reranker = reranker or getattr(vector_store, "reranker", None)
+        self.reranker = reranker
         self.query_processor = QueryProcessor()
         self.llm_client = get_llm_client()
 
@@ -110,16 +112,14 @@ class RAGChain:
             transform_result = await self.query_processor.transform(query)
 
         if builder:
-            builder.original_query = query
+            if not bypass_transform:
+                builder.original_query = query
             builder.transformation_technique = transform_result["strategy"]
             builder.transformed_query = " || ".join(
                 transform_result["transformed_queries"]
             )
 
         transformed_queries = transform_result["transformed_queries"]
-        # Cap fan-out — `decompose` can emit many sub-queries; re-running the
-        # cross-encoder on each is linear in N. Three covers the common case
-        # without blowing the latency budget.
         if len(transformed_queries) > 3:
             logger.info(
                 "Capping transformed_queries: %d -> 3",
@@ -151,9 +151,6 @@ class RAGChain:
         seen_pre: set[str] = set()
         seen_reranked: set[str] = set()
         candidate_multiplier = settings.hybrid_candidate_multiplier
-        # `False` when reranker is off / unavailable — skip threshold filtering
-        # since the scores in that path are not real relevance values.
-        reranker_active = bool(self.use_reranker and self.reranker)
 
         for t_query in transformed_queries:
             candidates = await asyncio.to_thread(
@@ -169,7 +166,7 @@ class RAGChain:
                     seen_pre.add(doc.page_content)
                     all_pre_rerank.append(doc)
 
-            if reranker_active:
+            if self.use_reranker and self.reranker:
                 rerank_start = builder.start_rerank() if builder else None
                 # Reranker takes plain Documents — strip the tuples first.
                 rerank_input: list[Document] = [doc for doc, _s in candidates]
@@ -187,7 +184,7 @@ class RAGChain:
                 iter_pairs = [(doc, 1.0) for doc, _s in candidates[:top_k]]
 
             for doc, score in iter_pairs:
-                if reranker_active and score < threshold:
+                if self.use_reranker and self.reranker and score < threshold:
                     continue
                 if doc.page_content in seen_reranked:
                     continue
@@ -301,10 +298,6 @@ class RAGChain:
         )
 
         if not docs_final:
-            # ``.count()`` is a sync Chroma call — hand it to a worker thread
-            # so the event loop stays responsive. ``self.vector_store.client``
-            # is unconditionally built in ``VectorStore.__init__``, so the
-            # null-check is dead and has been removed.
             collection = self.vector_store.client.get_or_create_collection(
                 self.vector_store.collection_name
             )
@@ -326,6 +319,7 @@ class RAGChain:
 
         context = self._build_context(docs_final)
 
+        #
         if not self_feedback_enabled:
             async for chunk in self.generate_stream(
                 query,
@@ -336,9 +330,6 @@ class RAGChain:
                 yield chunk
             return
 
-        # --- Self-Feedback Loop (buffered) ---
-        from app.core.orchestration.feedback import SelfFeedbackLoop
-
         loop = SelfFeedbackLoop()
         iteration = 0
         best_answer = ""
@@ -348,6 +339,7 @@ class RAGChain:
 
         while iteration <= settings.self_feedback_max_iterations:
             chunks: list[str] = []
+            # gather the chunk for evaluation
             async for chunk in self.generate_stream(
                 query,
                 context,
@@ -361,15 +353,11 @@ class RAGChain:
             try:
                 result = await loop.evaluate(answer, docs_final, query)
             except Exception as exc:
-                logger.warning(
+                logger.exception(
                     "Feedback evaluation failed at iteration %d: %s", iteration, exc
                 )
                 best_answer = answer
                 break
-
-            if result.composite_score > best_score:
-                best_score = result.composite_score
-                best_answer = answer
 
             if builder is not None:
                 builder.feedback_scores.append(
@@ -379,42 +367,35 @@ class RAGChain:
                         "relevance": result.relevance,
                         "completeness": result.completeness,
                         "critique": result.critique,
-                        "needs_refinement": result.needs_refinement,
                         "hallucination_detected": result.hallucination_detected,
                         "missing_from_context": result.missing_from_context,
                     }
                 )
                 builder.feedback_iterations = iteration + 1
 
-            if not result.needs_refinement:
+            if result.passes:
+                strategy_label = "passed"
+                best_score = result.composite_score
                 best_answer = answer
-                break
 
-            # Check latency budget
-            total_latency_ms = (time.perf_counter() - start_time) * 1000
-            if total_latency_ms > settings.self_feedback_max_latency_ms:
-                logger.warning(
-                    "Self-feedback latency budget exceeded (%.0f ms > %d ms), "
-                    "returning best answer (score=%.2f)",
-                    total_latency_ms,
-                    settings.self_feedback_max_latency_ms,
-                    best_score,
-                )
-                break
-
-            # --- Refinement strategy ---
-            # Two paths per the plan:
-            #   Irrelevant context → rewrite query + re-retrieve
-            #   Ungrounded/incomplete → regenerate with correction instruction
-            strategy_label: str
-            if result.relevance < settings.self_feedback_threshold:
+                total_latency_ms = (time.perf_counter() - start_time) * 1000
+                if total_latency_ms > settings.self_feedback_max_latency_ms:
+                    logger.warning(
+                        "Self-feedback latency budget exceeded (%.0f ms > %d ms), "
+                        "returning best answer (score=%.2f)",
+                        total_latency_ms,
+                        settings.self_feedback_max_latency_ms,
+                        best_score,
+                    )
+                    break
+            else:
                 rewritten = await self.query_processor.rewrite_with_feedback(
                     query, result.critique
                 )
                 new_query = rewritten[0]
                 strategy_label = f"re_retrieve: {new_query}"
 
-                logger.info(
+                logger.debug(
                     "Self-feedback: re-retrieving with rewritten query: %s", new_query
                 )
                 _, docs_final = await self.retrieve(
@@ -433,14 +414,7 @@ class RAGChain:
                     break
 
                 context = self._build_context(docs_final)
-                system_prompt = None  # context changed — reset instruction
-            else:
-                instruction = await loop.refine_and_regenerate(
-                    query, answer, result, docs_final
-                )
-                strategy_label = f"refine: {instruction[:80]}..."
-
-                system_prompt = f"{get_generation_system_prompt()}\n\n{instruction}"
+                system_prompt = None 
 
             if builder is not None and builder.feedback_scores:
                 builder.feedback_scores[-1]["strategy"] = strategy_label
@@ -452,6 +426,7 @@ class RAGChain:
                 "Self-feedback max iterations reached, returning best answer (score=%.2f)",
                 best_score,
             )
+            total_latency_ms = (time.perf_counter() - start_time) * 1000
 
         if builder is not None:
             builder.feedback_final_score = best_score if best_score >= 0 else None

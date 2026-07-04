@@ -234,6 +234,9 @@ class QueryProcessor:
         threshold — the original retrieval context didn't match user intent.
         Returns a single-element list containing the rewritten query (keeps the
         same return shape as the other transformation methods).
+        Two paths per the plan:
+           Irrelevant context → rewrite query + re-retrieve
+           Ungrounded/incomplete → regenerate with correction instruction
         """
         prompt = _FEEDBACK_REWRITE_PROMPT.format(query=query, critique=critique)
         try:

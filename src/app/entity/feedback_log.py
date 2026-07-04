@@ -92,7 +92,7 @@ class FeedbackLog(Base):
         comment="Refinement instruction or 're_retrieve: <query>' label",
     )
 
-    # Whether this iteration passed (needs_refinement = False).
+    # Whether this iteration passed
     passed: Mapped[bool] = mapped_column(
         default=False, comment="True if critic deemed this answer acceptable"
     )
