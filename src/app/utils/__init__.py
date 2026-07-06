@@ -1,5 +1,45 @@
 """Shared utilities — logging, telemetry, exceptions."""
 
-from .logger import setup_logging
+from app.utils.exceptions import (
+    AppException,
+    ChromaInsertionException,
+    ChromaQueryException,
+    CollectionNotFoundException,
+    CreateCollectionException,
+    DBInsertionException,
+    EmailAlreadyExistException,
+    EmbeddingException,
+    FileNameNotFound,
+    FileTypeNotSupportedException,
+    InvalidTokenException,
+    InvalidUsernamePasswordException,
+    LLMException,
+    PDFProcessingException,
+    RerankerException,
+    UserNotFoundException,
+    UsernameAlreadyExistException,
+    handle_app_exception,
+)
+from app.utils.logger import setup_logging
 
-__all__ = ["setup_logging"]
+__all__ = [
+    "AppException",
+    "ChromaInsertionException",
+    "ChromaQueryException",
+    "CollectionNotFoundException",
+    "CreateCollectionException",
+    "DBInsertionException",
+    "EmailAlreadyExistException",
+    "EmbeddingException",
+    "FileNameNotFound",
+    "FileTypeNotSupportedException",
+    "handle_app_exception",
+    "InvalidTokenException",
+    "InvalidUsernamePasswordException",
+    "LLMException",
+    "PDFProcessingException",
+    "RerankerException",
+    "setup_logging",
+    "UserNotFoundException",
+    "UsernameAlreadyExistException",
+]

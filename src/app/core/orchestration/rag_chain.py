@@ -19,9 +19,23 @@ from app.core.retrieval.vector_store import VectorStore
 from app.models.rag_trace import RAGTraceBuilder
 from app.utils.exceptions import LLMException
 from app.core.orchestration.feedback import SelfFeedbackLoop
-
+from huggingface_hub import ChatCompletionInputStreamOptions
 
 logger = logging.getLogger(__name__)
+
+# Query-type and strategy constants used in the transform result and feedback loop.
+QUERY_TYPE_FEEDBACK_REWRITE = "feedback_rewrite"
+STRATEGY_PASSTHROUGH = "passthrough"
+STRATEGY_RE_RETRIEVE_PREFIX = "re_retrieve:"
+
+
+def _doc_to_dict(doc: Document) -> dict[str, Any]:
+    """Convert a LangChain Document to a plain dict for trace persistence."""
+    return {
+        "content": doc.page_content,
+        "metadata": dict(doc.metadata or {}),
+    }
+
 
 # ------------------------------------------------------------------
 # Chain
@@ -63,6 +77,7 @@ class RAGChain:
         threshold: float | None = None,
         builder: RAGTraceBuilder | None = None,
         bypass_transform: bool = False,
+        filter: dict[str, Any] | None = None,
     ) -> tuple[list[Document], list[Document]]:
         """Retrieve, optionally rerank, and return ``(pre_rerank_docs, final_docs)``.
 
@@ -79,6 +94,10 @@ class RAGChain:
         When ``bypass_transform`` is ``True`` (used by the self-feedback re-retrieval
         path), the query is used as-is without classification or rewriting.
 
+        ``filter`` is an optional Chroma ``where`` clause forwarded to the
+        vector leg of hybrid search (BM25 cannot apply metadata filters). It
+        is captured verbatim onto the trace for downstream analysis.
+
         Sync CPU work (Chroma/BM25 + cross-encoder) runs on a worker thread via
         ``asyncio.to_thread`` so the FastAPI event loop stays responsive.
 
@@ -86,6 +105,7 @@ class RAGChain:
           * ``original_query``                — the raw query
           * ``transformation_technique``      — e.g. ``"rewrite"``, ``"hyde"``, ``"passthrough"``
           * ``transformed_query``             — the rewritten/decomposed/HyDE text(s)
+          * ``filters_applied``               — the metadata filter dict (or ``None``)
           * ``retrieved_chunks``              — pre-rerank docs (BM25 + vector) as dicts
           * ``reranked_chunks``               — docs after threshold filtering as dicts
           * ``context_passed_to_llm``         — the dedup'd + sliced list that actually
@@ -97,14 +117,20 @@ class RAGChain:
         if threshold is None:
             threshold = settings.rag_min_relevance
 
+        # Trace-level: capture the filter verbatim so analysts can correlate
+        # retrieval behaviour with scoped queries. ``hybrid_search`` only
+        # applies it to the vector leg (BM25 has no native metadata filter).
+        if builder is not None:
+            builder.filters_applied = filter
+
         # 1. Transform the query (classification + expansion)
         ret_start = builder.start_retrieval() if builder else None
 
         if bypass_transform:
             transform_result = {
                 "original_query": query,
-                "query_type": "feedback_rewrite",
-                "strategy": "passthrough",
+                "query_type": QUERY_TYPE_FEEDBACK_REWRITE,
+                "strategy": STRATEGY_PASSTHROUGH,
                 "transformed_queries": [query],
                 "confidence": 1.0,
             }
@@ -138,12 +164,6 @@ class RAGChain:
         if builder and builder.embedding_model_name is None:
             builder.embedding_model_name = Embedder.default_model_name()
 
-        def _doc_to_dict(doc: Document) -> dict[str, Any]:
-            return {
-                "content": doc.page_content,
-                "metadata": dict(doc.metadata or {}),
-            }
-
         # 2. For each transformed query, run hybrid search (pre-rerank) and rerank (post-rerank).
         # Hybrid candidates are (doc, score) tuples; reranker output is also (doc, score).
         all_pre_rerank: list[Document] = []
@@ -152,11 +172,12 @@ class RAGChain:
         seen_reranked: set[str] = set()
         candidate_multiplier = settings.hybrid_candidate_multiplier
 
-        for t_query in transformed_queries:
+        for single_query in transformed_queries:
             candidates = await asyncio.to_thread(
                 self.vector_store.hybrid_search,
-                t_query,
+                single_query,
                 top_k * candidate_multiplier,
+                filter=filter,
             )
 
             # Track pre-rerank (dedup across transformed queries so a chunk
@@ -169,10 +190,10 @@ class RAGChain:
             if self.use_reranker and self.reranker:
                 rerank_start = builder.start_rerank() if builder else None
                 # Reranker takes plain Documents — strip the tuples first.
-                rerank_input: list[Document] = [doc for doc, _s in candidates]
+                rerank_input: list[Document] = [doc for doc, _score in candidates]
                 reranked_pairs: list[tuple[Document, float]] = await asyncio.to_thread(
                     self.reranker.rerank,
-                    t_query,
+                    single_query,
                     rerank_input,
                     top_k,
                 )
@@ -181,7 +202,7 @@ class RAGChain:
                 iter_pairs: list[tuple[Document, float]] = reranked_pairs
             else:
                 # No real relevance signal — trust ordering, threshold disabled.
-                iter_pairs = [(doc, 1.0) for doc, _s in candidates[:top_k]]
+                iter_pairs = [(doc, 1.0) for doc, _score in candidates[:top_k]]
 
             for doc, score in iter_pairs:
                 if self.use_reranker and self.reranker and score < threshold:
@@ -237,17 +258,23 @@ class RAGChain:
             builder.llm_model_name = model
 
         llm_start = builder.start_llm() if builder else None
+        stream_opt = ChatCompletionInputStreamOptions()
+        stream_opt.include_usage = True
+        usage = None
         try:
-            response = await self.llm_client.chat.completions.create(
+            response = await self.llm_client.chat_completion(
                 model=model,
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": full_prompt},
                 ],
                 stream=True,
+                stream_options=stream_opt,
             )
             async for chunk in response:
                 text = parse_sse_chunk(chunk)
+                if chunk.usage is not None:
+                    usage = chunk.usage
                 if text:
                     if builder is not None:
                         builder.llm_response += text
@@ -255,8 +282,10 @@ class RAGChain:
         except Exception as exc:
             raise LLMException(str(exc)) from exc
         finally:
-            if builder is not None and llm_start is not None:
+            if builder is not None and llm_start is not None and usage is not None:
                 builder.stop_llm(llm_start)
+                builder.input_tokens = usage.prompt_tokens
+                builder.output_tokens = usage.completion_tokens
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -271,6 +300,7 @@ class RAGChain:
         builder: RAGTraceBuilder | None = None,
         previous_query: str | None = None,
         self_feedback_enabled: bool = False,
+        filter: dict[str, Any] | None = None,
     ) -> AsyncIterable[str]:
         """End-to-end RAG pipeline: retrieve → prompt → stream.
 
@@ -283,16 +313,25 @@ class RAGChain:
         prompt only — it does NOT influence retrieval, classification, or
         query rewriting, by design. Pass ``None`` for first-turn / anonymous
         requests and the prompt builder will simply omit the history block.
+
+        ``filter`` is an optional metadata filter (Chroma ``where`` clause)
+        passed through to retrieval. It is recorded on the trace so analysts
+        can correlate scoped queries with retrieval behaviour. The same
+        filter is reused for any self-feedback re-retrieval.
         """
         if threshold is None:
             threshold = settings.rag_min_relevance
 
-        docs_pre, docs_final = await self.retrieve(
-            query, top_k=top_k, threshold=threshold, builder=builder
+        docs_pre_rerank, docs_final = await self.retrieve(
+            query,
+            top_k=top_k,
+            threshold=threshold,
+            builder=builder,
+            filter=filter,
         )
         logger.info(
             "Retrieved %d candidate docs, %d final for query: %s",
-            len(docs_pre),
+            len(docs_pre_rerank),
             len(docs_final),
             query,
         )
@@ -393,7 +432,7 @@ class RAGChain:
                     query, result.critique
                 )
                 new_query = rewritten[0]
-                strategy_label = f"re_retrieve: {new_query}"
+                strategy_label = f"{STRATEGY_RE_RETRIEVE_PREFIX} {new_query}"
 
                 logger.debug(
                     "Self-feedback: re-retrieving with rewritten query: %s", new_query
@@ -404,6 +443,7 @@ class RAGChain:
                     threshold=threshold,
                     builder=builder,
                     bypass_transform=True,
+                    filter=filter,
                 )
 
                 if not docs_final:
@@ -414,7 +454,7 @@ class RAGChain:
                     break
 
                 context = self._build_context(docs_final)
-                system_prompt = None 
+                system_prompt = None
 
             if builder is not None and builder.feedback_scores:
                 builder.feedback_scores[-1]["strategy"] = strategy_label

@@ -3,8 +3,6 @@
 Source: backend/auth/service.py
 """
 
-from __future__ import annotations
-
 import logging
 from datetime import datetime, timedelta, timezone
 

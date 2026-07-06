@@ -3,8 +3,6 @@
 Thin filesystem wrapper — ready to swap for S3, Azure Blob, or GCS later.
 """
 
-from __future__ import annotations
-
 import logging
 from pathlib import Path
 

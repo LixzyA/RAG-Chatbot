@@ -3,8 +3,6 @@
 Source: backend/entity/chat_message.py
 """
 
-from __future__ import annotations
-
 from sqlalchemy import (
     CheckConstraint,
     DDL,

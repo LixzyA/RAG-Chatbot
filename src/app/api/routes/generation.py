@@ -1,9 +1,12 @@
 import logging
 import uuid
+from collections.abc import AsyncIterator
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.sse import EventSourceResponse, format_sse_event
+from fastapi.responses import StreamingResponse
+from fastapi.sse import format_sse_event
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import (
@@ -18,12 +21,73 @@ from app.entity.feedback_log import FeedbackLog
 from app.entity.rag_traces import RAG_traces
 from app.models.rag_trace import RAGTraceBuilder
 from app.models.requests import ChatQueryRequest
+from app.models.responses import _SSEStreamContext
 from app.services import chat_history_service
 from app.utils.exceptions import AppException
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+
+async def _safe_rollback(db: AsyncSession) -> None:
+    """Rollback *db*, logging failure without raising."""
+    try:
+        await db.rollback()
+    except Exception:
+        logger.exception("Database rollback failed")
+
+
+async def _sse_event_stream(ctx: _SSEStreamContext) -> AsyncIterator[bytes]:
+    """SSE token stream: yield chunks, persist trace + assistant message on completion."""
+    try:
+        async for chunk in ctx.chain.run(
+            ctx.prompt,
+            top_k=ctx.top_k,
+            builder=ctx.builder,
+            previous_query=ctx.previous_query,
+            self_feedback_enabled=ctx.self_feedback_enabled,
+            filter=ctx.metadata_filter,
+        ):
+            yield format_sse_event(data_str=chunk)
+    except AppException as exc:
+        logger.warning(
+            "SSE: RAG chain interrupted by %s: %s",
+            exc.__class__.__name__,
+            exc.message,
+        )
+        yield format_sse_event(data_str=f"[ERROR] {exc.message}")
+    except Exception as exc:
+        # SSE boundary safety-net: headers already flushed; emit error event.
+        logger.exception("SSE: unexpected failure in chain.run")
+        yield format_sse_event(data_str=f"[ERROR] Unexpected error: {exc}")
+    finally:
+        yield format_sse_event(data_str="[DONE]")
+
+        if ctx.builder.original_query:
+            await record_rag_trace(
+                ctx.db,
+                ctx.builder,
+                session_id=ctx.internal_session_id,
+                user_id=ctx.user_id,
+            )
+
+        # Save assistant message
+        if ctx.chat_id and ctx.user_id is not None:
+            try:
+                await chat_history_service.add_message(
+                    ctx.db,
+                    ctx.chat_id,
+                    {
+                        "id": ctx.assistant_msg_id,
+                        "role": "assistant",
+                        "content": ctx.builder.llm_response or "",
+                    },
+                    user_id=ctx.user_id,
+                )
+            except SQLAlchemyError:
+                logger.exception("Failed to save assistant message (non-fatal)")
+                await _safe_rollback(ctx.db)
 
 
 async def record_rag_trace(
@@ -45,6 +109,7 @@ async def record_rag_trace(
             original_query=builder.original_query,
             transformation_technique=builder.transformation_technique,
             transformed_query=builder.transformed_query,
+            filters_applied=builder.filters_applied,
             retrieved_chunks=builder.retrieved_chunks or None,
             reranked_chunks=builder.reranked_chunks or None,
             context_passed_to_llm=builder.context_passed_to_llm or None,
@@ -83,7 +148,7 @@ async def record_rag_trace(
                         ),
                         critique=score_entry.get("critique"),
                         refinement_strategy=score_entry.get("strategy"),
-                        passed=not score_entry.get("needs_refinement", False),
+                        passed=score_entry.get("strategy"),
                     )
                 )
             await db.commit()
@@ -91,12 +156,9 @@ async def record_rag_trace(
         logger.debug(
             "Recorded rag_traces row for query: %s", builder.original_query[:80]
         )
-    except Exception as exc:
+    except SQLAlchemyError as exc:
         logger.exception("Failed to persist rag_traces row (non-fatal): %s", exc)
-        try:
-            await db.rollback()
-        except Exception:
-            pass
+        await _safe_rollback(db)
 
 
 @router.post("/")
@@ -142,69 +204,30 @@ async def chat(
                 {"id": str(uuid.uuid4()), "role": "user", "content": query_req.prompt},
                 user_id=user_id,
             )
-        except Exception:
+        except SQLAlchemyError:
             logger.exception("Failed to save user message (non-fatal)")
-            try:
-                await db.rollback()
-            except Exception:
-                pass
+            await _safe_rollback(db)
 
     assistant_msg_id = str(uuid.uuid4())
     builder = RAGTraceBuilder()
-
-    async def event_stream():
-        try:
-            async for chunk in chain.run(
-                query_req.prompt,
-                top_k=query_req.top_k,
-                builder=builder,
-                previous_query=previous_query,
-                self_feedback_enabled=settings.self_feedback_enabled
-                or query_req.self_check,
-            ):
-                yield format_sse_event(data_str=chunk)
-        except AppException as exc:
-            logger.warning(
-                "SSE: RAG chain interrupted by %s: %s",
-                exc.__class__.__name__,
-                exc.message,
-            )
-            yield format_sse_event(data_str=f"[ERROR] {exc.message}")
-        except Exception as exc:
-            logger.exception("SSE: unexpected failure in chain.run")
-            yield format_sse_event(data_str=f"[ERROR] Unexpected error: {exc}")
-        finally:
-            yield format_sse_event(data_str="[DONE]")
-
-            if builder.original_query:
-                await record_rag_trace(
-                    db,
-                    builder,
-                    session_id=internal_session_id,
-                    user_id=user_id,
-                )
-
-            # Save assistant message
-            if query_req.chat_id and user_id is not None:
-                try:
-                    await chat_history_service.add_message(
-                        db,
-                        query_req.chat_id,
-                        {
-                            "id": assistant_msg_id,
-                            "role": "assistant",
-                            "content": builder.llm_response or "",
-                        },
-                        user_id=user_id,
-                    )
-                except Exception:
-                    logger.exception("Failed to save assistant message (non-fatal)")
-                    try:
-                        await db.rollback()
-                    except Exception:
-                        pass
-
-    return EventSourceResponse(event_stream())
+    ctx = _SSEStreamContext(
+        chain=chain,
+        prompt=query_req.prompt,
+        top_k=query_req.top_k,
+        metadata_filter=query_req.filter,
+        builder=builder,
+        previous_query=previous_query,
+        self_feedback_enabled=settings.self_feedback_enabled or query_req.self_check,
+        db=db,
+        internal_session_id=internal_session_id,
+        user_id=user_id,
+        assistant_msg_id=assistant_msg_id,
+        chat_id=query_req.chat_id,
+    )
+    return StreamingResponse(
+        _sse_event_stream(ctx),
+        media_type="text/event-stream",
+    )
 
 
 # ------------------------------------------------------------------

@@ -6,7 +6,6 @@ Submodules
 - ``chat_history_service`` — SQLite-backed chat session / message CRUD.
 - ``vector_db``         — ``VectorStore`` + ``CrossEncoderReranker`` singletons.
 - ``rag_chain``         — ``RAGChain`` singleton orchestrator.
-- ``cache``             — In-memory TTL cache (``TTLCache``).
 - ``storage``           — Local filesystem I/O (``StorageService``).
 """
 
@@ -18,7 +17,6 @@ from app.services.auth_service import (
     register_user,
     verify_password,
 )
-from app.services.cache import TTLCache, default_cache
 from app.services.chat_history_service import (
     add_message,
     create_or_get_history,
@@ -50,9 +48,6 @@ __all__ = [
     "get_history",
     "list_histories",
     "update_title",
-    # cache
-    "TTLCache",
-    "default_cache",
     # rag chain
     "get_rag_chain",
     "reset_rag_chain",

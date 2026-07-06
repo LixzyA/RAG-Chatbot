@@ -3,8 +3,6 @@
 Renamed from backend/entity/chat_history.py → ChatSession / chat_sessions.
 """
 
-from __future__ import annotations
-
 from sqlalchemy import ForeignKey, Index, Integer, Text, desc, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 

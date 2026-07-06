@@ -3,8 +3,6 @@
 Source: backend/file_mgt/service.py (pdfminer / text reading logic).
 """
 
-from __future__ import annotations
-
 import json
 from io import BytesIO
 from pathlib import Path

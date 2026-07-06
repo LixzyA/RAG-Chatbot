@@ -5,8 +5,6 @@ callers (routes) can inject the session via ``Depends(get_db)``. This keeps
 DB access consistent across the app and lets tests swap in a fake session.
 """
 
-from __future__ import annotations
-
 import logging
 from datetime import datetime, timezone
 from typing import Any

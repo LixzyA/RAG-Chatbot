@@ -5,8 +5,6 @@ POST /auth/login
 GET  /auth/me
 """
 
-from __future__ import annotations
-
 import logging
 from typing import Annotated
 

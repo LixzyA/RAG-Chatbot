@@ -3,8 +3,6 @@
 Source: backend/entity/user.py
 """
 
-from __future__ import annotations
-
 from sqlalchemy import Integer, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 

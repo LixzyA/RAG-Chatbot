@@ -51,6 +51,14 @@ class RAG_traces(Base):
         nullable=True,
         comment="The query after transformation (joined with ' || ' if multiple)",
     )
+    filters_applied: Mapped[dict | None] = mapped_column(
+        JSON,
+        nullable=True,
+        comment=(
+            "Metadata filter passed to vector retrieval, if any "
+            "(key/value pairs from the request, after validation)."
+        ),
+    )
 
     # --- Retrieval & Reranking Details ---
     # JSON stores lists of {content, metadata, score?} dicts at each stage.

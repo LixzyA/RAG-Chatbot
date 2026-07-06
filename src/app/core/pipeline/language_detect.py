@@ -5,8 +5,6 @@ Thin wrapper around ``langdetect``; returns ``"en"``, ``"id"``, or ``"unknown"``
 Only used in the FastAPI path — batch path gets language from the caller.
 """
 
-from __future__ import annotations
-
 import logging
 
 import langdetect  # pyright: ignore[reportMissingTypeStubs]

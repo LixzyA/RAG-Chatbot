@@ -8,8 +8,6 @@ Uses the **router model** (small) for all LLM calls — classification,
 rewriting, decomposition, and HyDE generation.
 """
 
-from __future__ import annotations
-
 import json
 import re
 from typing import Any

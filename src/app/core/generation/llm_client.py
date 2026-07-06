@@ -3,8 +3,6 @@
 Source: backend/chat/core.py (AsyncInferenceClient singleton + healthcheck).
 """
 
-from __future__ import annotations
-
 import logging
 from huggingface_hub import AsyncInferenceClient
 

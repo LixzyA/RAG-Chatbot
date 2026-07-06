@@ -20,6 +20,31 @@ ALLOWED_FILTER_KEYS: frozenset[str] = frozenset(
 )
 
 
+def _validate_metadata_filter(v: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Curated allowlist for metadata filter keys/values.
+
+    Shared by request schemas that accept user-supplied metadata filters so
+    all entrypoints map to the same downstream Chroma ``where`` semantics.
+    """
+    if v is None:
+        return v
+    for key, val in v.items():
+        if key not in ALLOWED_FILTER_KEYS:
+            raise ValueError(
+                f"Unknown filter key '{key}'. Allowed: {sorted(ALLOWED_FILTER_KEYS)}"
+            )
+        if isinstance(val, list):
+            if not all(isinstance(x, str) for x in val):
+                raise ValueError(
+                    f"List filter values for '{key}' must be list[str] (Chroma $in semantics)"
+                )
+        elif not isinstance(val, (str, int, float)):
+            raise ValueError(
+                f"Filter value for '{key}' must be str|int|float|list[str], got {type(val).__name__}"
+            )
+    return v
+
+
 # --------------------------------------------------------------------------
 # Auth
 # --------------------------------------------------------------------------
@@ -49,6 +74,19 @@ class ChatQueryRequest(BaseModel):
         default=False,
         description="Enable per-request self-feedback loop for A/B testing",
     )
+    filter: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Optional metadata filter narrowed by the curated allowlist. "
+            f"Keys: {sorted(ALLOWED_FILTER_KEYS)}. "
+            "Values: str | int | float | list[str]."
+        ),
+    )
+
+    @field_validator("filter")
+    @classmethod
+    def _validate_chat_filter(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        return _validate_metadata_filter(v)
 
 
 # --------------------------------------------------------------------------
@@ -107,23 +145,7 @@ class RetrieveRequest(BaseModel):
     @field_validator("filter")
     @classmethod
     def _validate_filter(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
-        if v is None:
-            return v
-        for key, val in v.items():
-            if key not in ALLOWED_FILTER_KEYS:
-                raise ValueError(
-                    f"Unknown filter key '{key}'. Allowed: {sorted(ALLOWED_FILTER_KEYS)}"
-                )
-            if isinstance(val, list):
-                if not all(isinstance(x, str) for x in val):
-                    raise ValueError(
-                        f"List filter values for '{key}' must be list[str] (Chroma $in semantics)"
-                    )
-            elif not isinstance(val, (str, int, float)):
-                raise ValueError(
-                    f"Filter value for '{key}' must be str|int|float|list[str], got {type(val).__name__}"
-                )
-        return v
+        return _validate_metadata_filter(v)
 
 
 class RetrieveBatchRequest(BaseModel):

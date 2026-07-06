@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.routes.auth import router as auth_router
 from app.api.routes.generation import router as chat_router
@@ -30,12 +31,9 @@ warnings.filterwarnings(
 
 
 async def _load_reranker(reranker):
-    try:
-        logger.info("Loading reranker in background...")
-        await asyncio.to_thread(reranker._load)
-        logger.info("Reranker loaded")
-    except Exception:
-        logger.exception("Failed to load reranker")
+    logger.info("Loading reranker in background...")
+    await asyncio.to_thread(reranker._load)
+    logger.info("Reranker loaded")
 
 
 async def _init_db():
@@ -43,7 +41,7 @@ async def _init_db():
         logger.info("Initialising database...")
         await init_db()
         logger.info("Database initialised")
-    except Exception:
+    except SQLAlchemyError:
         logger.exception("Failed to initialise database")
 
 

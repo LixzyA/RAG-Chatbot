@@ -3,8 +3,6 @@
 Source: backend/vectordb/custom_embeddings.py (sentence-transformers adapter).
 """
 
-from __future__ import annotations
-
 import asyncio
 
 from sentence_transformers import SentenceTransformer

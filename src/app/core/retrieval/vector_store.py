@@ -3,8 +3,6 @@
 Source: backend/vectordb/core.py (ChromaDB object + LangChain Chroma integration).
 """
 
-from __future__ import annotations
-
 import pickle
 from pathlib import Path
 
@@ -143,7 +141,7 @@ class VectorStore:
                 )
                 return []
 
-        self.bm25_retriever.k = k  # type: ignore[union-attr]
+        self.bm25_retriever.k = k
         vector_search_kwargs: dict = {"k": k}
         if filter is not None:
             vector_search_kwargs["filter"] = filter

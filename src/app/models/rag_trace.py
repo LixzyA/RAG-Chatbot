@@ -18,6 +18,7 @@ class RAGTraceBuilder(BaseModel):
     original_query: str = ""
     transformation_technique: str | None = None
     transformed_query: str | None = None
+    filters_applied: dict[str, Any] | None = None
 
     # Stage outputs (list[dict] — each dict mirrors one Document snapshot)
     retrieved_chunks: list[dict[str, Any]] = Field(default_factory=list)

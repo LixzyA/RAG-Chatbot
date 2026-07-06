@@ -5,6 +5,11 @@ Covers both synchronous and streaming (SSE) response shapes.
 
 from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict
+from typing import Any
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.orchestration.rag_chain import RAGChain
+from app.models.rag_trace import RAGTraceBuilder
 
 
 # --------------------------------------------------------------------------
@@ -62,6 +67,27 @@ class ChatRouteInfo(BaseModel):
     topic: str
     confidence: float
     model_used: str  # "generation"
+
+
+class _SSEStreamContext(BaseModel):
+    """Bundle all state captured by the SSE event-stream generator.
+
+    Avoids a nested closure inside the route so the generator can live
+    at module level and remain testable outside the FastAPI context.
+    """
+
+    chain: RAGChain
+    prompt: str
+    top_k: int
+    metadata_filter: dict[str, Any] | None
+    builder: RAGTraceBuilder
+    previous_query: str | None
+    self_feedback_enabled: bool
+    db: AsyncSession
+    internal_session_id: int | None
+    user_id: int | None
+    assistant_msg_id: str
+    chat_id: str | None
 
 
 # --------------------------------------------------------------------------

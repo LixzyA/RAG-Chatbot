@@ -4,8 +4,6 @@ These are injected into route handlers via ``Depends(...)`` so tests can
 override them with fakes.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import AsyncGenerator
 from typing import Annotated

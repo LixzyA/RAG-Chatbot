@@ -4,8 +4,6 @@ The single system prompt is inlined below so this module is self-contained
 and does not need to carry the old ``.txt`` files around.
 """
 
-from __future__ import annotations
-
 import logging
 
 logger = logging.getLogger(__name__)

@@ -98,19 +98,51 @@ api/routes/          HTTP/WS interface
 - **Chroma DB**: `VectorStore.hybrid_search()` can return `[]` when the collection is empty — the RAG chain turns this into a friendly message to the user.
 
 # Coding Conventions
-- Helper functions do not need to have try except clause. Keep the try except clause in the worker function.
-- Keep components focused and composable
-- Extract repeated logics into helper functions
-- prefer descriptive variable names over abbreviations
-- Do not leave dead code or commented out blocks
-- Do not use __future__ annotations
-- Add comments only when intent is non obvious
-- Keep API endpoint functions slim
-- Prefer pydantic BaseModel over dataclass
-- Export all public apis to __init__.py
-- do not create a function inside a function
-- do not create a class inside a class
-- prefer creating custom exception class and catch using the exception class
+
+## General
+- Keep components focused and composable.
+- Extract repeated logic into helper functions.
+- Prefer descriptive variable names over abbreviations.
+- Do not leave dead code or commented-out blocks.
+- Add comments only when the intent is non-obvious.
+- Do not create functions inside functions.
+- Do not create classes inside classes.
+- Export all public APIs in __init__.py.
+- Prefer explicit code over clever code.
+- All public functions should have complete type hints.
+- Each function should do one thing and do it well.
+- Keep functions small enough that their purpose is immediately obvious.
+- Log meaningful events, not every line of execution.
+- Never log secrets or credentials.
+- Name functions using verbs.
+- Name classes using nouns.
+- Avoid generic names like data, info, manager, helper, util.
+- Replace magic numbers and strings with named constants.
+
+## Error Handling
+- Catch exceptions at the boundary of a workflow unless a helper function can meaningfully recover from the error or add useful context.
+- Prefer creating custom exception classes for domain-specific errors.
+- Catch specific exceptions instead of using bare `except` or `except Exception` whenever practical.
+- Never silently swallow exceptions.
+
+## API Design
+- Keep API endpoint functions slim.
+- Move business logic into service layers.
+- Validate request data using Pydantic models.
+- Do not block the event loop.
+- Use async only when the underlying operations are asynchronous.
+
+## Data Models
+- Prefer Pydantic BaseModel over dataclass for request/response models.
+- Keep ORM models separate from API models.
+
+## Python Style
+- Do not use `from __future__ import annotations`.
+- Prefer pathlib over os.path.
+- Prefer f-strings over string concatenation.
+- Remove unused imports.
+- Avoid wildcard imports.
+- Group imports as: standard library, third-party, local modules.
 
 # Files and component placements
 - Add services into src/app/services folder
