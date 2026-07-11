@@ -32,6 +32,7 @@ STRATEGY_RE_RETRIEVE_PREFIX = "re_retrieve:"
 def _doc_to_dict(doc: Document) -> dict[str, Any]:
     """Convert a LangChain Document to a plain dict for trace persistence."""
     return {
+        "id": doc.id,
         "content": doc.page_content,
         "metadata": dict(doc.metadata or {}),
     }
@@ -405,6 +406,9 @@ class RAGChain:
                         "faithfulness": result.faithfulness,
                         "relevance": result.relevance,
                         "completeness": result.completeness,
+                        "groundedness": result.groundedness,
+                        "truthfulness": result.truthfulness,
+                        "context_relevance": result.context_relevance,
                         "critique": result.critique,
                         "hallucination_detected": result.hallucination_detected,
                         "missing_from_context": result.missing_from_context,

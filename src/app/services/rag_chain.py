@@ -25,7 +25,7 @@ def get_rag_chain() -> RAGChain:
     Lazily constructs the chain on first access, wiring it to the shared
     ``VectorStore`` and enabling the reranker.
     """
-    global _rag_chain  # noqa: PLW0603
+    global _rag_chain
     if _rag_chain is None:
         _rag_chain = RAGChain(
             vector_store=get_vector_store(),
@@ -37,7 +37,7 @@ def get_rag_chain() -> RAGChain:
 
 def reset_rag_chain() -> None:
     """Drop the cached chain (useful for tests or graceful shutdown)."""
-    global _rag_chain  # noqa: PLW0603
+    global _rag_chain
     if _rag_chain is not None:
         logger.info("RAGChain singleton reset")
     _rag_chain = None

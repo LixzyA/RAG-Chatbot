@@ -24,17 +24,20 @@ USER QUERY:
 GENERATED ANSWER:
 {answer}
 
-Evaluate the answer on three dimensions (each 0.0-1.0):
+Evaluate the answer on SIX dimensions (each 0.0-1.0):
 1. faithfulness - Are ALL claims in the answer supported by the context? (1.0 = every claim has a source, 0.0 = entirely fabricated)
 2. relevance - Does the answer directly address the user's query? (1.0 = perfectly on-topic, 0.0 = completely irrelevant)
 3. completeness - Does the answer cover all key information in the context? (1.0 = nothing important missed, 0.0 = misses everything)
+4. groundedness - What fraction of the answer's claims can be traced back to specific passages in the context? (1.0 = every sentence traceable, 0.0 = none traceable)
+5. truthfulness - Does the answer avoid factual contradictions with the context? (1.0 = no contradictions at all, 0.0 = contradicts the context)
+6. context_relevance - How relevant are the retrieved documents to the user's query? (1.0 = all documents highly relevant, 0.0 = none relevant)
 
 Also identify:
 - hallucination_detected: true if any claim in the answer contradicts or cannot be found in the context
 - missing_from_context: list of key topics present in the context but absent from the answer
 
 Output JSON only:
-{{"faithfulness": ..., "relevance": ..., "completeness": ..., "critique": "...", "hallucination_detected": ..., "missing_from_context": [...]}}
+{{"faithfulness": ..., "relevance": ..., "completeness": ..., "groundedness": ..., "truthfulness": ..., "context_relevance": ..., "critique": "...", "hallucination_detected": ..., "missing_from_context": [...]}}
 """
 
 
@@ -77,7 +80,7 @@ class SelfFeedbackLoop:
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.1,
-                max_tokens=256,
+                max_tokens=512,
             )
             raw = response.choices[0].message.content or ""
         except Exception as exc:
@@ -87,6 +90,9 @@ class SelfFeedbackLoop:
                 faithfulness=1.0,
                 relevance=1.0,
                 completeness=1.0,
+                groundedness=1.0,
+                truthfulness=1.0,
+                context_relevance=1.0,
                 critique="Critic LLM call failed, falling open.",
             )
 
@@ -117,6 +123,9 @@ class SelfFeedbackLoop:
                 faithfulness=1.0,
                 relevance=1.0,
                 completeness=1.0,
+                groundedness=1.0,
+                truthfulness=1.0,
+                context_relevance=1.0,
                 critique="Critic response parsing failed.",
             )
 
@@ -124,6 +133,9 @@ class SelfFeedbackLoop:
             faithfulness=float(result.get("faithfulness", 1.0)),
             relevance=float(result.get("relevance", 1.0)),
             completeness=float(result.get("completeness", 1.0)),
+            groundedness=float(result.get("groundedness", 1.0)),
+            truthfulness=float(result.get("truthfulness", 1.0)),
+            context_relevance=float(result.get("context_relevance", 1.0)),
             critique=result.get("critique", ""),
             hallucination_detected=result.get("hallucination_detected", False),
             missing_from_context=result.get("missing_from_context", []),

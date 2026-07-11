@@ -1,0 +1,19 @@
+{
+  "queries": [
+    {
+      "query": "What is the capital of France?",
+      "expected_answer": "Paris is the capital of France.",
+      "relevant_doc_ids": []
+    },
+    {
+      "query": "Explain the refund policy.",
+      "expected_answer": "",
+      "relevant_doc_ids": []
+    },
+    {
+      "query": "How does authentication work?",
+      "expected_answer": "",
+      "relevant_doc_ids": []
+    }
+  ]
+}

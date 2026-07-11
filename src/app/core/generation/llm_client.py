@@ -16,9 +16,9 @@ _llm_client: AsyncInferenceClient | None = None
 
 def get_llm_client() -> AsyncInferenceClient:
     """Return the global :class:`AsyncInferenceClient` singleton."""
-    global _llm_client  # noqa: PLW0603
+    global _llm_client
     if _llm_client is None:
-        _llm_client = AsyncInferenceClient()
+        _llm_client = AsyncInferenceClient(token=settings.hf_token)
         logger.info("AsyncInferenceClient initialised")
     return _llm_client
 

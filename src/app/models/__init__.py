@@ -13,16 +13,21 @@ from app.models.requests import (
     RetrieveRequest,
 )
 from app.models.responses import (
+    # Auth
+    UserResponse,
+    TokenResponse,
+    # Chat
     ChatMessage,
-    ChatRouteInfo,
     ChatSessionResponse,
     ChatSessionSummary,
-    HealthResponse,
+    ChatRouteInfo,
+    # Ingestion
+    UploadFileResponse,
+    # Retrieval
     RetrievedDocument,
     RetrieveResponse,
-    TokenResponse,
-    UploadFileResponse,
-    UserResponse,
+    # Health
+    HealthResponse,
 )
 
 __all__ = [

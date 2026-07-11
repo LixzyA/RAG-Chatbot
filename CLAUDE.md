@@ -107,7 +107,7 @@ api/routes/          HTTP/WS interface
 - Add comments only when the intent is non-obvious.
 - Do not create functions inside functions.
 - Do not create classes inside classes.
-- Export all public APIs in __init__.py.
+- Export all public APIs and light functions in __init__.py.
 - Prefer explicit code over clever code.
 - All public functions should have complete type hints.
 - Each function should do one thing and do it well.
