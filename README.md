@@ -97,6 +97,7 @@ cp .env.example .env
 ```
 
 Ensure the following variables are filled in inside your `.env`:
+
 - `HF_TOKEN`: Hugging Face User Access Token (API permissions).
 - `JWT_SECRET_KEY`: Random string for JWT verification tokens.
 
@@ -132,7 +133,8 @@ npm run dev
 ```
 
 Open your browser at `http://localhost:5173`. The UI includes:
-- **Dashboard**: Overview of conversational states.
+
+- **Home**: Overview of the system and checks health.
 - **Chat Interface** ([Chat.tsx](file:///c:/Project/RAG-Chatbot/src/frontend/src/pages/Chat.tsx)): Interactive prompt input displaying RAG logs, evaluation critiques, and model parameters.
 - **Document Manager** ([Files.tsx](file:///c:/Project/RAG-Chatbot/src/frontend/src/pages/Files.tsx)): Screen to upload and ingestion-index system files.
 
@@ -164,12 +166,14 @@ uv run python tools/evaluate.py tests/eval_queries.json --output report.json
 ```
 
 **Parameters supported:**
+
 - `--top-k`: Number of candidate chunks to fetch (default: 10).
 - `--threshold`: Relevance score limit below which documents are filtered out.
 - `--self-feedback`: Toggle on the self-feedback critique loops during the test run.
 - `--output` / `-o`: Write a full JSON report containing per-query metrics to this path.
 
 The script prints a detailed console summary of the results:
+
 - **Latency metrics**: Mean, minimum, and maximum latency for query retrieval, cross-encoder rerank, and LLM text generation.
 - **Tokens stats**: Prompt vs. completion tokens.
 - **Retrieval accuracy**: Precision@5, Recall@5, and Mean Reciprocal Rank (MRR) based on ground-truth documents.
