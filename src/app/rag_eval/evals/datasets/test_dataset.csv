@@ -1,0 +1,5 @@
+question,reference,expect_no_context,reference_chunk_id,reference_source
+"Which god do Geri and Freki accompany?","Geri and Freki are two wolves that accompany the god Odin.",false,sha256:85f12e5f4953f3c5,https://en.wikipedia.org/wiki/Geri_and_Freki
+"What did Odin give Geri and Freki from his table?","Odin gave all the food on his table to Geri and Freki; Odin himself required no food because wine was both meat and drink.",false,sha256:686bfab1e09721d5,https://en.wikipedia.org/wiki/Geri_and_Freki
+"Which large seaports are on Mozambique's Indian Ocean coast?","The large seaports are Nacala, Beira, and Maputo.",false,sha256:c9d1f3e99416a208,https://en.wikipedia.org/wiki/Transport_in_Mozambique
+"What is the RAG Chatbot refund policy?",,true,,
